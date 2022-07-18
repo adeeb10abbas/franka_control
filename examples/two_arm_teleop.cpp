@@ -26,9 +26,28 @@
 #include "franka_control/PTIPacket.h"
 
 std::mutex mtx;
+bool done = false;
 
-class Panda {
+void signal_callback_handler(int signum) {
+    std::cout << "CTRL+C interrupted. " << std::endl;
+    // Terminate program
+    if (signum == SIGINT) {
+        done = true;
+    }
+    exit(signum);
+}
+
+class PTINode {
     public:
+
+    explicit PTINode(ros::NodeHandle& node, std::string type);
+    void run();
+    ros::NodeHandle nh_;
+    ros::Subscriber pti_packet_sub;
+    ros::Publisher pti_packet_pub;
+    std::string node_type;
+    void publish_ptipacket();
+    void ptipacket_callback(const franka_control::PTIPacket::ConstPtr &msg);
     // robot model
     // franka::Robot robot;
     // franka::Model model;
@@ -66,6 +85,7 @@ class Panda {
     Eigen::Vector3d position_in;
     Eigen::Vector3d angle_in;
     Eigen::Matrix<double, 6, 1> twist_in;
+    double wave_damping;
 
     int delay_current_index;
     int delay_cycle_previous;
@@ -90,6 +110,8 @@ class Panda {
         position_in.setZero();
         angle_in.setZero();
         twist_in.setZero();
+
+        wave_damping = 10.0;
 
         delay_current_index = 0;
         delay_cycle_previous = 3;
@@ -130,8 +152,6 @@ class Panda {
     /* master wave variable controller */
     void mTeleController(void) {
 
-        double wave_damping = 0.1;
-
         force.setZero();
         force.head(3) = -1.0 * (wave_damping * twist.head(3) - std::sqrt(2.0 * wave_damping) * wave_in);
         wave_out = std::sqrt(2.0 * wave_damping) * twist.head(3) - wave_in;
@@ -144,9 +164,8 @@ class Panda {
 
         int num = 3;
         double sample_time = 1e-3;
-        double wave_damping = 0.1;
         double lambda = 10.0;
-        double translation_stiffness = 300.0;
+        double translation_stiffness = 30.0;
         double translation_damping = 2.0 * 1.0 * std::sqrt(translation_stiffness * 1.0);
         double rotation_stiffness = 10.0;
         double rotation_damping = 2.0 * 1.0 * std::sqrt(rotation_stiffness * 1.0);
@@ -215,26 +234,11 @@ class Panda {
 
 
         // open loop rotation control
-        force.tail(3) = rotation_stiffness * (angle_in - angle_relative) + rotation_damping * (twist_d.tail(3) - twist.tail(3));
+        force.tail(3) = -rotation_stiffness * (angle_in - angle_relative) + rotation_damping * (twist_in.tail(3) - twist.tail(3));
 
         tau = jacobian.transpose() * force + coriolis;
     }
 
-};
-
-class PTINode {
-    public:
-    explicit PTINode(ros::NodeHandle& node, std::string type);
-    // ~PTINode();
-    void run();
-    
-    Panda *panda;
-    ros::NodeHandle nh_;
-    ros::Subscriber pti_packet_sub;
-    ros::Publisher pti_packet_pub;
-    std::string node_type;
-    void publish_ptipacket();
-    void ptipacket_callback(const franka_control::PTIPacket::ConstPtr &msg);
 };
 
 /* Panda teleop interface */
@@ -262,36 +266,36 @@ void PTINode::publish_ptipacket() {
     franka_control::PTIPacket packet_msg;
     packet_msg.wave.resize(3);
 
-    mtx.lock();
+    // mtx.lock();
     for (int i = 0; i < 3; i ++) {
-        packet_msg.wave[i] = panda->wave_out[i];
+        packet_msg.wave[i] = wave_out[i];
     }
-    packet_msg.position.x = panda->position_relative[0];
-    packet_msg.position.y = panda->position_relative[1];
-    packet_msg.position.z = panda->position_relative[2];
-    packet_msg.angle.x = panda->angle_relative[0];
-    packet_msg.angle.y = panda->angle_relative[1];
-    packet_msg.angle.z = panda->angle_relative[2];
-    packet_msg.twist.linear.x = panda->twist[0];
-    packet_msg.twist.linear.y = panda->twist[1];
-    packet_msg.twist.linear.z = panda->twist[2];
-    packet_msg.twist.angular.x = panda->twist[3];
-    packet_msg.twist.angular.y = panda->twist[4];
-    packet_msg.twist.angular.z = panda->twist[5];
-    mtx.unlock();
+    packet_msg.position.x = position_relative[0];
+    packet_msg.position.y = position_relative[1];
+    packet_msg.position.z = position_relative[2];
+    packet_msg.angle.x = angle_relative[0];
+    packet_msg.angle.y = angle_relative[1];
+    packet_msg.angle.z = angle_relative[2];
+    packet_msg.twist.linear.x = twist[0];
+    packet_msg.twist.linear.y = twist[1];
+    packet_msg.twist.linear.z = twist[2];
+    packet_msg.twist.angular.x = twist[3];
+    packet_msg.twist.angular.y = twist[4];
+    packet_msg.twist.angular.z = twist[5];
+    // mtx.unlock();
 
-    if (pti_packet_pub.getNumSubscribers() == 0) {
-        if (node_type == "master") {
-            ROS_ERROR_STREAM("Connection lost, trying to reconnect...");
-            pti_packet_pub.shutdown();
-            pti_packet_pub = nh_.advertise<franka_control::PTIPacket>("/pti_master_output", 1);
-        }
-        else if (node_type == "slave") {
-            ROS_ERROR_STREAM("Connection lost, trying to reconnect...");
-            pti_packet_pub.shutdown();
-            pti_packet_pub = nh_.advertise<franka_control::PTIPacket>("/pti_slave_output", 1);
-        }
-    }
+    // if (pti_packet_pub.getNumSubscribers() == 0) {
+    //     if (node_type == "master") {
+    //         ROS_ERROR_STREAM("Connection lost, trying to reconnect...");
+    //         pti_packet_pub.shutdown();
+    //         pti_packet_pub = nh_.advertise<franka_control::PTIPacket>("/pti_master_output", 1);
+    //     }
+    //     else if (node_type == "slave") {
+    //         ROS_ERROR_STREAM("Connection lost, trying to reconnect...");
+    //         pti_packet_pub.shutdown();
+    //         pti_packet_pub = nh_.advertise<franka_control::PTIPacket>("/pti_slave_output", 1);
+    //     }
+    // }
 
     pti_packet_pub.publish(packet_msg);
 
@@ -300,22 +304,23 @@ void PTINode::publish_ptipacket() {
 /* Subscriber callback */
 void PTINode::ptipacket_callback(const franka_control::PTIPacket::ConstPtr &packet_msg) {
 
-    mtx.lock();
+    // mtx.lock();
     for (int i = 0; i < 3; i ++) {
-        panda->wave_in[i] = packet_msg->wave[i];
+        wave_in[i] = packet_msg->wave[i];
     }
-    panda->position_in << packet_msg->position.x, packet_msg->position.y, packet_msg->position.z;
-    panda->angle_in << packet_msg->angle.x, packet_msg->angle.y, packet_msg->angle.z;
-    panda->twist_in << packet_msg->twist.linear.x, packet_msg->twist.linear.y, packet_msg->twist.linear.z,\
+    position_in << packet_msg->position.x, packet_msg->position.y, packet_msg->position.z;
+    angle_in << packet_msg->angle.x, packet_msg->angle.y, packet_msg->angle.z;
+    twist_in << packet_msg->twist.linear.x, packet_msg->twist.linear.y, packet_msg->twist.linear.z,\
                     packet_msg->twist.angular.x, packet_msg->twist.angular.y, packet_msg->twist.angular.z;
-    mtx.unlock();
+    // mtx.unlock();
     ROS_INFO_THROTTLE(1, "Write into pti memory");
 }
 
 /* Run loop */
 void PTINode::run() {
-    ros::Rate loop_rate(500);
+    ros::Rate loop_rate(1000);
     while (ros::ok()) {
+        signal(SIGINT, signal_callback_handler);
         publish_ptipacket();
         ros::spinOnce();
         loop_rate.sleep();
@@ -343,12 +348,10 @@ int main(int argc, char** argv) {
     }
 
     ros::NodeHandle node("~");
-    Panda panda;
+    // Panda panda;
 
     PTINode pti(node, std::string(argv[2]));
-    ROS_INFO("Node starts running");
-
-    // pti.run();
+    std::cout << "Node starts running" << std::endl;
 
     try {
         // connect to robot
@@ -357,37 +360,55 @@ int main(int argc, char** argv) {
         setDefaultBehavior(robot);
         // load the kinematics and dynamics model
         franka::Model model = robot.loadModel();
-        panda.initial_state = robot.readOnce();
-        panda.teleInit(model);
+        pti.initial_state = robot.readOnce();
+        pti.teleInit(model);
+        std::cout << "PTI class initialized" << std::endl;
 
-        // // set collision behavior
-        // robot.setCollisionBehavior({{100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0}},
-        //                         {{100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0}},
-        //                         {{100.0, 100.0, 100.0, 100.0, 100.0, 100.0}},
-        //                         {{100.0, 100.0, 100.0, 100.0, 100.0, 100.0}});
+        // set collision behavior
+        robot.setCollisionBehavior({{100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0}},
+                                {{100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0}},
+                                {{100.0, 100.0, 100.0, 100.0, 100.0, 100.0}},
+                                {{100.0, 100.0, 100.0, 100.0, 100.0, 100.0}});
 
-        // std::function<franka::Torques(const franka::RobotState&, franka::Duration)>
-        //     impedance_control_callback = [&](const franka::RobotState& robot_state, franka::Duration period) -> franka::Torques 
-        // {
+        std::function<franka::Torques(const franka::RobotState&, franka::Duration)>
+            impedance_control_callback = [&pti, &model, &argv](const franka::RobotState& robot_state, franka::Duration period) -> franka::Torques 
+        {
+            pti.robotStateUpdate(model, robot_state);
+            if (std::string(argv[2]) == "master") {
+                pti.mTeleController();
+            }
+            else if (std::string(argv[2]) == "slave") {
+                pti.sTeleController();
+            }
+
+            std::array<double, 7> tau_d_array{};
+            Eigen::VectorXd::Map(&tau_d_array[0], 7) = pti.tau;
             
-        //     return tau_d_array;
-        // };
+            return tau_d_array;
+        };
 
-        size_t count = 0;
-        robot.read([&count, &panda, &model, &argv](const franka::RobotState& robot_state) {
-        // Printing to std::cout adds a delay. This is acceptable for a read loop such as this, but
-        // should not be done in a control loop.
-        // std::cout << robot_state << std::endl;
-        panda.robotStateUpdate(model, robot_state);
-        if (std::string(argv[2]) == "master") {
-            panda.mTeleController();
-        }
-        else if (std::string(argv[2]) == "slave") {
-            panda.sTeleController();
-        }
-        std::cout << panda.tau << std::endl;
-        return ++count < 1;
-        });
+        std::cin.ignore();
+        std::cout << "Panda teleop controller starts running" << std::endl;
+        std::thread th_control([&](){robot.control(impedance_control_callback);});
+
+        pti.run();
+        th_control.join();
+
+        // size_t count = 0;
+        // robot.read([&count, &panda, &model, &argv](const franka::RobotState& robot_state) {
+        // // Printing to std::cout adds a delay. This is acceptable for a read loop such as this, but
+        // // should not be done in a control loop.
+        // // std::cout << robot_state << std::endl;
+        // panda.robotStateUpdate(model, robot_state);
+        // if (std::string(argv[2]) == "master") {
+        //     panda.mTeleController();
+        // }
+        // else if (std::string(argv[2]) == "slave") {
+        //     panda.sTeleController();
+        // }
+        // std::cout << panda.tau << std::endl;
+        // return ++count < 1;
+        // });
 
         std::cout << "Done." << std::endl;
     } catch (franka::Exception const& e) {
