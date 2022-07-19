@@ -10,6 +10,9 @@
 #include <math.h> 
 
 #include <Eigen/Dense>
+#include <Eigen/Core>
+#include <Eigen/LU>
+#include <Eigen/SVD>
 #include <chrono>
 
 #include <franka/duration.h>
@@ -57,6 +60,7 @@ class PTINode {
     Eigen::Matrix<double, 7, 1> q0;
     Eigen::Matrix<double, 7, 1> dq;
     Eigen::Matrix<double, 7, 1> tau;
+    Eigen::Matrix<double, 7, 1> tau_nullspace;
 
     /* robot initial state */
     franka::RobotState initial_state;
@@ -110,6 +114,7 @@ class PTINode {
         position_in.setZero();
         angle_in.setZero();
         twist_in.setZero();
+        tau_nullspace.setZero();
 
         wave_damping = 10.0;
 
@@ -142,6 +147,9 @@ class PTINode {
 
         Eigen::Quaterniond orientation_relative;
         Eigen::Vector3d angle_relative_local;
+        if (orientation_0.coeffs().dot(orientation.coeffs()) < 0.0) {
+            orientation.coeffs() << -orientation.coeffs();
+        }
         orientation_relative = orientation.inverse() * orientation_0;
         angle_relative_local << orientation_relative.x(), orientation_relative.y(), orientation_relative.z();
         angle_relative = transform.linear() * angle_relative_local;
@@ -156,7 +164,7 @@ class PTINode {
         force.head(3) = -1.0 * (wave_damping * twist.head(3) - std::sqrt(2.0 * wave_damping) * wave_in);
         wave_out = std::sqrt(2.0 * wave_damping) * twist.head(3) - wave_in;
 
-        tau = jacobian.transpose() * force + coriolis;
+        tau = jacobian.transpose() * force + coriolis + tau_nullspace;
     }
 
     /* slave wave variable controller */
@@ -165,7 +173,7 @@ class PTINode {
         int num = 3;
         double sample_time = 1e-3;
         double lambda = 10.0;
-        double translation_stiffness = 30.0;
+        double translation_stiffness = 300.0;
         double translation_damping = 2.0 * 1.0 * std::sqrt(translation_stiffness * 1.0);
         double rotation_stiffness = 10.0;
         double rotation_damping = 2.0 * 1.0 * std::sqrt(rotation_stiffness * 1.0);
@@ -235,8 +243,76 @@ class PTINode {
 
         // open loop rotation control
         force.tail(3) = -rotation_stiffness * (angle_in - angle_relative) + rotation_damping * (twist_in.tail(3) - twist.tail(3));
+        
+        tau = jacobian.transpose() * force + coriolis + tau_nullspace;
+    }
 
-        tau = jacobian.transpose() * force + coriolis;
+    /* joint virtual wall limit*/
+    void jointLimit(void) {
+        const std::array<double, 7> q_min_degree = {{-160.0, -95.0, -160.0, -170.0, -160.0, 5.0, -160.0}};
+        const std::array<double, 7> q_max_degree = {{160.0, 95.0, 160.0, -10.0, 160.0, 209.0, 160.0}};
+        const std::array<double, 7> k_gains = {{600.0, 600.0, 600.0, 600.0, 250.0, 150.0, 50.0}};
+        const std::array<double, 7> d_gains = {{50.0, 50.0, 50.0, 50.0, 30.0, 25.0, 15.0}};
+        double d2r = 180.0 / M_PI;
+        std::array<double, 7> q_min_radian;
+        std::array<double, 7> q_max_radian;
+
+        Eigen::Matrix<double, 7, 1> tau_wall;
+
+        for (int i = 0; i < 7; i ++) {
+            q_min_radian[i] = q_min_degree[i] / d2r;
+            q_max_radian[i] = q_max_degree[i] / d2r;
+            if (q[i] < q_min_radian[i]) {
+                tau_wall[i] = (k_gains[i] * (q_min_radian[i] - q[i]) - d_gains[i] * dq[i]);
+                // std::cout << "Joint [" << i << "] reach lower limit" << std::endl;
+            }
+            else if (q[i] > q_max_radian[i]) {
+                tau_wall[i] = (k_gains[i] * (q_max_radian[i] - q[i]) - d_gains[i] * dq[i]);
+                // std::cout << "Joint [" << i << "] reach upper limit" << std::endl;
+            }
+            else {
+                tau_wall[i] = 0.0;
+                // std::cout << "All joints are within range limitation." << std::endl;
+            }
+        }
+
+        tau += tau_wall;
+    }
+
+    /* null space handling */
+    void nullHandling(void) {
+
+        Eigen::MatrixXd jacobian_transpose_pinv;
+        double nullspace_stiffness_ = 20.0;
+
+        while (!done) {
+
+            pseudoInverse(jacobian.transpose(), jacobian_transpose_pinv, true);
+            // nullspace PD control with damping ratio = 1
+            tau_nullspace << (Eigen::MatrixXd::Identity(7, 7) - jacobian.transpose() * jacobian_transpose_pinv) * 
+                        (nullspace_stiffness_ * (q0 - q) - (2.0 * std::sqrt(nullspace_stiffness_)) * dq);
+        
+            // std::cout << tau_nullspace.transpose() << std::endl;
+        }
+
+    }
+
+    private:
+    
+    /* damped pseudo inverse function */
+    void pseudoInverse(const Eigen::MatrixXd& M_, Eigen::MatrixXd& M_pinv_, bool damped = true) {
+
+        double lambda_ = damped ? 0.2 : 0.0;
+
+        Eigen::JacobiSVD<Eigen::MatrixXd> svd(M_, Eigen::ComputeFullU | Eigen::ComputeFullV);
+        Eigen::JacobiSVD<Eigen::MatrixXd>::SingularValuesType sing_vals_ = svd.singularValues();
+        Eigen::MatrixXd S_ = M_;  // copying the dimensions of M_, its content is not needed.
+        S_.setZero();
+
+        for (int i = 0; i < sing_vals_.size(); i++)
+            S_(i, i) = (sing_vals_(i)) / (sing_vals_(i) * sing_vals_(i) + lambda_ * lambda_);
+
+        M_pinv_ = Eigen::MatrixXd(svd.matrixV() * S_.transpose() * svd.matrixU().transpose());
     }
 
 };
@@ -381,6 +457,10 @@ int main(int argc, char** argv) {
                 pti.sTeleController();
             }
 
+            pti.jointLimit();
+            // pti.nullHandling();
+            // std::cout << pti.tau_nullspace.transpose() << std::endl;
+
             std::array<double, 7> tau_d_array{};
             Eigen::VectorXd::Map(&tau_d_array[0], 7) = pti.tau;
             
@@ -390,9 +470,11 @@ int main(int argc, char** argv) {
         std::cin.ignore();
         std::cout << "Panda teleop controller starts running" << std::endl;
         std::thread th_control([&](){robot.control(impedance_control_callback);});
+        std::thread th_nullspaceControl([&](){pti.nullHandling();});
 
         pti.run();
         th_control.join();
+        th_nullspaceControl.join();
 
         // size_t count = 0;
         // robot.read([&count, &panda, &model, &argv](const franka::RobotState& robot_state) {
