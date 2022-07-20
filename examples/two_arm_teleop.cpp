@@ -28,7 +28,6 @@
 #include "std_msgs/Bool.h"
 #include "franka_control/PTIPacket.h"
 
-std::mutex mtx;
 bool done = false;
 
 void signal_callback_handler(int signum) {
@@ -54,6 +53,7 @@ class PTINode {
     // robot model
     // franka::Robot robot;
     // franka::Model model;
+    std::mutex mtx;
 
     /* robot joint state */
     Eigen::Matrix<double, 7, 1> q;
@@ -173,7 +173,7 @@ class PTINode {
         int num = 3;
         double sample_time = 1e-3;
         double lambda = 10.0;
-        double translation_stiffness = 300.0;
+        double translation_stiffness = 600.0;
         double translation_damping = 2.0 * 1.0 * std::sqrt(translation_stiffness * 1.0);
         double rotation_stiffness = 10.0;
         double rotation_damping = 2.0 * 1.0 * std::sqrt(rotation_stiffness * 1.0);
@@ -283,15 +283,16 @@ class PTINode {
     void nullHandling(void) {
 
         Eigen::MatrixXd jacobian_transpose_pinv;
-        double nullspace_stiffness_ = 20.0;
+        double nullspace_stiffness_ = 5.0;
 
+        ros::Rate loop_rate(500);
         while (!done) {
-
             pseudoInverse(jacobian.transpose(), jacobian_transpose_pinv, true);
             // nullspace PD control with damping ratio = 1
             tau_nullspace << (Eigen::MatrixXd::Identity(7, 7) - jacobian.transpose() * jacobian_transpose_pinv) * 
                         (nullspace_stiffness_ * (q0 - q) - (2.0 * std::sqrt(nullspace_stiffness_)) * dq);
-        
+            
+            loop_rate.sleep();
             // std::cout << tau_nullspace.transpose() << std::endl;
         }
 
@@ -397,7 +398,7 @@ void PTINode::run() {
     ros::Rate loop_rate(1000);
     while (ros::ok()) {
         signal(SIGINT, signal_callback_handler);
-        publish_ptipacket();
+        // publish_ptipacket();
         ros::spinOnce();
         loop_rate.sleep();
     }
@@ -434,17 +435,29 @@ int main(int argc, char** argv) {
         franka::Robot robot(argv[1]);
         robot.automaticErrorRecovery();
         setDefaultBehavior(robot);
-        // load the kinematics and dynamics model
-        franka::Model model = robot.loadModel();
-        pti.initial_state = robot.readOnce();
-        pti.teleInit(model);
-        std::cout << "PTI class initialized" << std::endl;
+
+        // First move the robot to a suitable joint configuration
+        // std::array<double, 7> q_goal = {{0, -M_PI_4, 0, -3 * M_PI_4, 0, M_PI_2, M_PI_4}};
+        std::array<double, 7> q_goal = {{-0.624, 0.997, 0.964, -2.381, 1.604, 2.402, 0.740}};
+        MotionGenerator motion_generator(0.5, q_goal);
+        std::cout << "WARNING: This example will move the robot! "
+                << "Please make sure to have the user stop button at hand!" << std::endl
+                << "Press Enter to continue..." << std::endl;
+        std::cin.ignore();
+        robot.control(motion_generator);
+        std::cout << "Finished moving to initial joint configuration." << std::endl;
 
         // set collision behavior
         robot.setCollisionBehavior({{100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0}},
                                 {{100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0}},
                                 {{100.0, 100.0, 100.0, 100.0, 100.0, 100.0}},
                                 {{100.0, 100.0, 100.0, 100.0, 100.0, 100.0}});
+
+        // load the kinematics and dynamics model
+        franka::Model model = robot.loadModel();
+        pti.initial_state = robot.readOnce();
+        pti.teleInit(model);
+        std::cout << "PTI class initialized" << std::endl;
 
         std::function<franka::Torques(const franka::RobotState&, franka::Duration)>
             impedance_control_callback = [&pti, &model, &argv](const franka::RobotState& robot_state, franka::Duration period) -> franka::Torques 
@@ -458,8 +471,7 @@ int main(int argc, char** argv) {
             }
 
             pti.jointLimit();
-            // pti.nullHandling();
-            // std::cout << pti.tau_nullspace.transpose() << std::endl;
+            pti.publish_ptipacket();
 
             std::array<double, 7> tau_d_array{};
             Eigen::VectorXd::Map(&tau_d_array[0], 7) = pti.tau;
@@ -467,10 +479,9 @@ int main(int argc, char** argv) {
             return tau_d_array;
         };
 
-        std::cin.ignore();
         std::cout << "Panda teleop controller starts running" << std::endl;
         std::thread th_control([&](){robot.control(impedance_control_callback);});
-        std::thread th_nullspaceControl([&](){pti.nullHandling();});
+        std::thread th_nullspaceControl([&pti](){pti.nullHandling();});
 
         pti.run();
         th_control.join();
