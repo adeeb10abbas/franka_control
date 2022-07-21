@@ -173,10 +173,10 @@ class PTINode {
         int num = 3;
         double sample_time = 1e-3;
         double lambda = 10.0;
-        double translation_stiffness = 600.0;
+        double translation_stiffness = 1000.0;
         double translation_damping = 2.0 * 1.0 * std::sqrt(translation_stiffness * 1.0);
-        double rotation_stiffness = 10.0;
-        double rotation_damping = 2.0 * 1.0 * std::sqrt(rotation_stiffness * 1.0);
+        double rotation_stiffness = 20.0;
+        double rotation_damping = 2.0 * 1.0 * std::sqrt(rotation_stiffness * 0.1);
 
         Eigen::Vector3d actual_position_error;
         Eigen::Vector3d predict_position_error;
@@ -185,7 +185,7 @@ class PTINode {
 
         int delay_index;
         int delay_difference;
-        int delay_cycle_current = 3;
+        int delay_cycle_current = 1;
 
         // translation part with wave variable
         position_d += twist_d.head(3) * sample_time;
@@ -283,7 +283,7 @@ class PTINode {
     void nullHandling(void) {
 
         Eigen::MatrixXd jacobian_transpose_pinv;
-        double nullspace_stiffness_ = 5.0;
+        double nullspace_stiffness_ = 1.0;
 
         ros::Rate loop_rate(500);
         while (!done) {
