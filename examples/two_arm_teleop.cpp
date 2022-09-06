@@ -176,7 +176,7 @@ class PTINode {
         double translation_stiffness = 1000.0;
         double translation_damping = 2.0 * 1.0 * std::sqrt(translation_stiffness * 1.0);
         double rotation_stiffness = 20.0;
-        double rotation_damping = 2.0 * 1.0 * std::sqrt(rotation_stiffness * 0.1);
+        double rotation_damping = 2.0 * 0.7 * std::sqrt(rotation_stiffness * 0.1);
 
         Eigen::Vector3d actual_position_error;
         Eigen::Vector3d predict_position_error;
@@ -185,7 +185,7 @@ class PTINode {
 
         int delay_index;
         int delay_difference;
-        int delay_cycle_current = 1;
+        int delay_cycle_current = 5;
 
         // translation part with wave variable
         position_d += twist_d.head(3) * sample_time;
@@ -242,7 +242,8 @@ class PTINode {
 
 
         // open loop rotation control
-        force.tail(3) = -rotation_stiffness * (angle_in - angle_relative) + rotation_damping * (twist_in.tail(3) - twist.tail(3));
+        // force.tail(3) = -rotation_stiffness * (angle_in - angle_relative) + rotation_damping * (twist_in.tail(3) - twist.tail(3));
+        force.tail(3) = -rotation_stiffness * (-angle_in - angle_relative) + rotation_damping * (twist_in.tail(3) - twist.tail(3));
         
         tau = jacobian.transpose() * force + coriolis + tau_nullspace;
     }
@@ -329,7 +330,7 @@ PTINode::PTINode(ros::NodeHandle& node, std::string type): node_type(type) {
     }
     else if (node_type == "slave") {
         ROS_INFO("Launch ros interface as slave");
-        pti_packet_sub = nh_.subscribe("/pti_master_output", 1, &PTINode::ptipacket_callback, this, ros::TransportHints().udp());
+        pti_packet_sub = nh_.subscribe("/smarty_arm_output", 1, &PTINode::ptipacket_callback, this, ros::TransportHints().udp());
         pti_packet_pub = nh_.advertise<franka_control::PTIPacket>("/pti_slave_output", 1);
     }
 
