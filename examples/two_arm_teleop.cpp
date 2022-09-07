@@ -78,6 +78,7 @@ class PTINode {
     Eigen::Matrix<double, 6, 1> twist;
     Eigen::Matrix<double, 6, 1> twist_d;
     Eigen::Matrix<double, 6, 1> force;
+    Eigen::Matrix<double, 6, 1> est_ext_force;
 
     Eigen::Matrix<double, 7, 1> coriolis;
     Eigen::Matrix<double, 6, 7> jacobian;
@@ -139,6 +140,10 @@ class PTINode {
         jacobian = Eigen::Map<const Eigen::Matrix<double, 6, 7>>(jacobian_array.data());
         q = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(robot_state.q.data());
         dq = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(robot_state.dq.data());
+
+        est_ext_force = Eigen::Map<const Eigen::Matrix<double, 6, 1>>(robot_state.O_F_ext_hat_K.data());
+
+        // std::cout << est_ext_force.transpose()<< std::endl;
 
         transform = Eigen::Matrix4d::Map(robot_state.O_T_EE.data());
         position = transform.translation();
@@ -436,10 +441,17 @@ int main(int argc, char** argv) {
         franka::Robot robot(argv[1]);
         robot.automaticErrorRecovery();
         setDefaultBehavior(robot);
+        
+        // set external load
+        const double load_mass = 1.0;
+        const std::array< double, 3 > F_x_Cload = {{0.0, 0.09, 0.0}};
+        const std::array< double, 9 > load_inertia = {{0.0143, 0.0, 0.0, 0.0, 0.0053, 0.0, 0.0, 0.0, 0.0121}};
+        robot.setLoad(load_mass, F_x_Cload, load_inertia);
 
         // First move the robot to a suitable joint configuration
         // std::array<double, 7> q_goal = {{0, -M_PI_4, 0, -3 * M_PI_4, 0, M_PI_2, M_PI_4}};
-        std::array<double, 7> q_goal = {{-0.624, 0.997, 0.964, -2.381, 1.604, 2.402, 0.740}};
+        // std::array<double, 7> q_goal = {{-0.624, 0.997, 0.964, -2.381, 1.604, 2.402, 0.740}};
+        std::array<double, 7> q_goal = {{-0.825713, 0.935, 1.28088, -2.44478, 1.61106, 2.45854, 0.989905}};
         MotionGenerator motion_generator(0.5, q_goal);
         std::cout << "WARNING: This example will move the robot! "
                 << "Please make sure to have the user stop button at hand!" << std::endl
