@@ -181,7 +181,7 @@ class PTINode {
         double translation_stiffness = 1000.0;
         double translation_damping = 2.0 * 1.0 * std::sqrt(translation_stiffness * 1.0);
         double rotation_stiffness = 20.0;
-        double rotation_damping = 2.0 * 0.7 * std::sqrt(rotation_stiffness * 0.1);
+        double rotation_damping = 2.0 * 1.0 * std::sqrt(rotation_stiffness * 0.1);
 
         Eigen::Vector3d actual_position_error;
         Eigen::Vector3d predict_position_error;
@@ -348,10 +348,12 @@ PTINode::PTINode(ros::NodeHandle& node, std::string type): node_type(type) {
 void PTINode::publish_ptipacket() {
     franka_control::PTIPacket packet_msg;
     packet_msg.wave.resize(3);
+    packet_msg.test.resize(3);
 
     // mtx.lock();
     for (int i = 0; i < 3; i ++) {
         packet_msg.wave[i] = wave_out[i];
+        packet_msg.test[i] = force[i];
     }
     packet_msg.position.x = position_relative[0];
     packet_msg.position.y = position_relative[1];
@@ -443,9 +445,13 @@ int main(int argc, char** argv) {
         setDefaultBehavior(robot);
         
         // set external load
-        const double load_mass = 1.0;
-        const std::array< double, 3 > F_x_Cload = {{0.0, 0.09, 0.0}};
-        const std::array< double, 9 > load_inertia = {{0.0143, 0.0, 0.0, 0.0, 0.0053, 0.0, 0.0, 0.0, 0.0121}};
+        // const double load_mass = 1.0;
+        // const std::array< double, 3 > F_x_Cload = {{0.0, 0.09, 0.0}};
+        // const std::array< double, 9 > load_inertia = {{0.0143, 0.0, 0.0, 0.0, 0.0053, 0.0, 0.0, 0.0, 0.0121}};
+        // robot.setLoad(load_mass, F_x_Cload, load_inertia);
+        const double load_mass = 0.0;
+        const std::array< double, 3 > F_x_Cload = {{0.0, 0.0, 0.0}};
+        const std::array< double, 9 > load_inertia = {{0.001, 0.0, 0.0, 0.0, 0.001, 0.0, 0.0, 0.0, 0.001}};
         robot.setLoad(load_mass, F_x_Cload, load_inertia);
 
         // First move the robot to a suitable joint configuration
