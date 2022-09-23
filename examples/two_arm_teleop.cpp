@@ -106,6 +106,8 @@ class PTINode {
 
         q0 = Eigen::Map<Eigen::Matrix<double, 7, 1>>(initial_state.q.data());
 
+        std::cout << q0.transpose() << std::endl;
+
         jacobian = Eigen::Map<const Eigen::Matrix<double, 6, 7>>(model.zeroJacobian(franka::Frame::kEndEffector, initial_state).data());
 
         position_d.setZero();
@@ -445,19 +447,17 @@ int main(int argc, char** argv) {
         setDefaultBehavior(robot);
         
         // set external load
-        // const double load_mass = 1.0;
-        // const std::array< double, 3 > F_x_Cload = {{0.0, 0.09, 0.0}};
-        // const std::array< double, 9 > load_inertia = {{0.0143, 0.0, 0.0, 0.0, 0.0053, 0.0, 0.0, 0.0, 0.0121}};
-        // robot.setLoad(load_mass, F_x_Cload, load_inertia);
-        const double load_mass = 0.0;
-        const std::array< double, 3 > F_x_Cload = {{0.0, 0.0, 0.0}};
-        const std::array< double, 9 > load_inertia = {{0.001, 0.0, 0.0, 0.0, 0.001, 0.0, 0.0, 0.0, 0.001}};
+        const double load_mass = 2.5;
+        const std::array< double, 3 > F_x_Cload = {{0.0, 0.03, -0.06}};
+        const std::array< double, 9 > load_inertia = {{0.01395, 0.0, 0.0, 0.0, 0.01395, 0.0, 0.0, 0.0, 0.00125}};
+        // const double load_mass = 0.0;
+        // const std::array< double, 3 > F_x_Cload = {{0.0, 0.0, 0.0}};
+        // const std::array< double, 9 > load_inertia = {{0.001, 0.0, 0.0, 0.0, 0.001, 0.0, 0.0, 0.0, 0.001}};
         robot.setLoad(load_mass, F_x_Cload, load_inertia);
 
         // First move the robot to a suitable joint configuration
         // std::array<double, 7> q_goal = {{0, -M_PI_4, 0, -3 * M_PI_4, 0, M_PI_2, M_PI_4}};
-        // std::array<double, 7> q_goal = {{-0.624, 0.997, 0.964, -2.381, 1.604, 2.402, 0.740}};
-        std::array<double, 7> q_goal = {{-0.825713, 0.935, 1.28088, -2.44478, 1.61106, 2.45854, 0.989905}};
+        std::array<double, 7> q_goal = {{0.228637, 0.275867, -0.772249, -2.61911, 2.58442, 1.73716, 0.993105}};
         MotionGenerator motion_generator(0.5, q_goal);
         std::cout << "WARNING: This example will move the robot! "
                 << "Please make sure to have the user stop button at hand!" << std::endl
