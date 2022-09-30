@@ -252,8 +252,8 @@ class PTINode {
     void jointLimit(void) {
         const std::array<double, 7> q_min_degree = {{-160.0, -95.0, -160.0, -170.0, -160.0, 5.0, -160.0}};
         const std::array<double, 7> q_max_degree = {{160.0, 95.0, 160.0, -10.0, 160.0, 209.0, 160.0}};
-        const std::array<double, 7> k_gains = {{600.0, 600.0, 600.0, 600.0, 250.0, 150.0, 50.0}};
-        const std::array<double, 7> d_gains = {{50.0, 50.0, 50.0, 50.0, 30.0, 25.0, 15.0}};
+        const std::array<double, 7> k_gains = {{600.0, 600.0, 600.0, 600.0, 150.0, 150.0, 50.0}};
+        const std::array<double, 7> d_gains = {{50.0, 50.0, 50.0, 50.0, 25.0, 25.0, 15.0}};
         double d2r = 180.0 / M_PI;
         std::array<double, 7> q_min_radian;
         std::array<double, 7> q_max_radian;
@@ -431,7 +431,7 @@ void panda_control(ros::NodeHandle& node, std::string type, std::string ip, int*
             robot.setLoad(load_mass, F_x_Cload, load_inertia);
         }
         else if (type == "Left") {
-            const double load_mass = 1.0;
+            const double load_mass = 0.0;
             const std::array< double, 3 > F_x_Cload = {{0.0, 0.0, 0.0}};
             const std::array< double, 9 > load_inertia = {{0.001, 0.0, 0.0, 0.0, 0.001, 0.0, 0.0, 0.0, 0.001}};
             robot.setLoad(load_mass, F_x_Cload, load_inertia);
@@ -559,6 +559,7 @@ int main(int argc, char** argv) {
 
     std::thread left_arm_run([&left_node, ip_left, &left_status](){arm_run(left_node, "Left", ip_left, &left_status);});
     arm_run(right_node, "Right", ip_right, &right_status);
+    // arm_run(right_node, "Left", ip_left, &left_status);
     left_arm_run.join();
 
     std::cout << "Done." << std::endl;

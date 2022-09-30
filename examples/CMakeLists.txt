@@ -45,6 +45,7 @@ set(EXAMPLES
   # vacuum_object
   cartesian_impedance_teleop
   two_arm_teleop
+  avatar_panda
 )
 
 foreach(example ${EXAMPLES})
@@ -56,6 +57,7 @@ endforeach()
 # target_link_libraries(joint_impedance_control Threads::Threads)
 target_link_libraries(cartesian_impedance_teleop Threads::Threads)
 target_link_libraries(two_arm_teleop Threads::Threads)
+target_link_libraries(avatar_panda Threads::Threads)
 # target_link_libraries(motion_with_control Poco::Foundation)
 
 include(GNUInstallDirs)
