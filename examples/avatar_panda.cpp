@@ -148,7 +148,7 @@ class PTINode {
 
         est_ext_force = Eigen::Map<const Eigen::Matrix<double, 6, 1>>(robot_state.O_F_ext_hat_K.data());
 
-        // std::cout << est_ext_force.transpose()<< std::endl;
+        // std::cout << q.transpose()<< std::endl;
 
         transform = Eigen::Matrix4d::Map(robot_state.O_T_EE.data());
         position = transform.translation();
@@ -250,10 +250,10 @@ class PTINode {
 
     /* joint virtual wall limit*/
     void jointLimit(void) {
-        const std::array<double, 7> q_min_degree = {{-160.0, -95.0, -160.0, -170.0, -160.0, 5.0, -160.0}};
-        const std::array<double, 7> q_max_degree = {{160.0, 95.0, 160.0, -10.0, 160.0, 209.0, 160.0}};
-        const std::array<double, 7> k_gains = {{600.0, 600.0, 600.0, 600.0, 150.0, 150.0, 50.0}};
-        const std::array<double, 7> d_gains = {{50.0, 50.0, 50.0, 50.0, 25.0, 25.0, 15.0}};
+        const std::array<double, 7> q_min_degree = {{-160.0, -90.0, -160.0, -160.0, -160.0, 5.0, -35.0}};
+        const std::array<double, 7> q_max_degree = {{160.0, 90.0, 160.0, -15.0, 160.0, 209.0, 130.0}};
+        const std::array<double, 7> k_gains = {{600.0, 600.0, 600.0, 600.0, 100.0, 100.0, 50.0}};
+        const std::array<double, 7> d_gains = {{50.0, 50.0, 50.0, 50.0, 20.0, 20.0, 15.0}};
         double d2r = 180.0 / M_PI;
         std::array<double, 7> q_min_radian;
         std::array<double, 7> q_max_radian;
@@ -431,7 +431,7 @@ void panda_control(ros::NodeHandle& node, std::string type, std::string ip, int*
             robot.setLoad(load_mass, F_x_Cload, load_inertia);
         }
         else if (type == "Left") {
-            const double load_mass = 0.0;
+            const double load_mass = 1.0;
             const std::array< double, 3 > F_x_Cload = {{0.0, 0.0, 0.0}};
             const std::array< double, 9 > load_inertia = {{0.001, 0.0, 0.0, 0.0, 0.001, 0.0, 0.0, 0.0, 0.001}};
             robot.setLoad(load_mass, F_x_Cload, load_inertia);
@@ -443,7 +443,7 @@ void panda_control(ros::NodeHandle& node, std::string type, std::string ip, int*
             q_goal = std::array<double, 7>{{0.228637, 0.275867, -0.772249, -2.61911, 2.58442, 1.73716, 0.993105}};
         }
         else if (type == "Left") {
-            q_goal = std::array<double, 7>{{1.3242, 0.0660153, 0.0266862, -2.69879, -1.71939, 1.67199, 0.368443}};
+            q_goal = std::array<double, 7>{{1.25711, 0.820966, -0.901313, -2.48992, -2.67695, 1.89659, 1.12316}};
         }
         MotionGenerator motion_generator(0.3, q_goal);
         std::cout << "WARNING: " << type << " arm starts moving."
@@ -557,10 +557,10 @@ int main(int argc, char** argv) {
     std::string ip_right = "192.168.1.101";
     std::string ip_left = "192.168.1.100";
 
-    std::thread left_arm_run([&left_node, ip_left, &left_status](){arm_run(left_node, "Left", ip_left, &left_status);});
-    arm_run(right_node, "Right", ip_right, &right_status);
-    // arm_run(right_node, "Left", ip_left, &left_status);
-    left_arm_run.join();
+    // std::thread left_arm_run([&left_node, ip_left, &left_status](){arm_run(left_node, "Left", ip_left, &left_status);});
+    // arm_run(right_node, "Right", ip_right, &right_status);
+    arm_run(left_node, "Left", ip_left, &left_status);
+    // left_arm_run.join();
 
     std::cout << "Done." << std::endl;
     
