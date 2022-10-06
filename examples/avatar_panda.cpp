@@ -173,7 +173,7 @@ class PTINode {
         int num = 3;
         double sample_time = 1e-3;
         double lambda = 10.0;
-        double translation_stiffness = 1000.0;
+        double translation_stiffness = 1200.0;
         double translation_damping = 2.0 * 1.0 * std::sqrt(translation_stiffness * 1.0);
         double rotation_stiffness = 20.0;
         double rotation_damping = 2.0 * 1.0 * std::sqrt(rotation_stiffness * 0.1);
@@ -242,7 +242,6 @@ class PTINode {
 
 
         // open loop rotation control
-        // force.tail(3) = -rotation_stiffness * (angle_in - angle_relative) + rotation_damping * (twist_in.tail(3) - twist.tail(3));
         force.tail(3) = -rotation_stiffness * (-angle_in - angle_relative) + rotation_damping * (twist_in.tail(3) - twist.tail(3));
         
         tau = jacobian.transpose() * force + coriolis + tau_nullspace + tau_wall;
@@ -252,8 +251,8 @@ class PTINode {
     void jointLimit(void) {
         const std::array<double, 7> q_min_degree = {{-160.0, -90.0, -160.0, -160.0, -160.0, 5.0, -35.0}};
         const std::array<double, 7> q_max_degree = {{160.0, 90.0, 160.0, -15.0, 160.0, 209.0, 130.0}};
-        const std::array<double, 7> k_gains = {{600.0, 600.0, 600.0, 600.0, 100.0, 100.0, 50.0}};
-        const std::array<double, 7> d_gains = {{50.0, 50.0, 50.0, 50.0, 20.0, 20.0, 15.0}};
+        const std::array<double, 7> k_gains = {{400.0, 400.0, 400.0, 400.0, 50.0, 100.0, 50.0}};
+        const std::array<double, 7> d_gains = {{35.0, 35.0, 35.0, 35.0, 15.0, 20.0, 15.0}};
         double d2r = 180.0 / M_PI;
         std::array<double, 7> q_min_radian;
         std::array<double, 7> q_max_radian;
@@ -281,7 +280,7 @@ class PTINode {
     void nullHandling(int* status) {
 
         Eigen::MatrixXd jacobian_transpose_pinv;
-        double nullspace_stiffness_ = 1.0;
+        double nullspace_stiffness_ = 2.0;
 
         th_nullspace_running = true;
 
@@ -425,22 +424,24 @@ void panda_control(ros::NodeHandle& node, std::string type, std::string ip, int*
         
         // set external load
         if (type == "Right") {
-            const double load_mass = 2.5;
+            const double load_mass = 2.0; // 2.5 fully filled
             const std::array< double, 3 > F_x_Cload = {{0.0, 0.03, -0.06}};
             const std::array< double, 9 > load_inertia = {{0.01395, 0.0, 0.0, 0.0, 0.01395, 0.0, 0.0, 0.0, 0.00125}};
+            // const std::array< double, 3 > F_x_Cload = {{0.0, 0.0, 0.0}};
+            // const std::array< double, 9 > load_inertia = {{0.001, 0.0, 0.0, 0.0, 0.001, 0.0, 0.0, 0.0, 0.001}};
             robot.setLoad(load_mass, F_x_Cload, load_inertia);
         }
         else if (type == "Left") {
-            const double load_mass = 1.0;
-            const std::array< double, 3 > F_x_Cload = {{0.0, 0.0, 0.0}};
-            const std::array< double, 9 > load_inertia = {{0.001, 0.0, 0.0, 0.0, 0.001, 0.0, 0.0, 0.0, 0.001}};
+            const double load_mass = 2.0;
+            const std::array< double, 3 > F_x_Cload = {{0.0, 0.03, -0.06}};
+            const std::array< double, 9 > load_inertia = {{0.01395, 0.0, 0.0, 0.0, 0.01395, 0.0, 0.0, 0.0, 0.00125}};
             robot.setLoad(load_mass, F_x_Cload, load_inertia);
         }
         
         // First move the robot to a suitable joint configuration
         std::array<double, 7> q_goal;
         if (type == "Right") {
-            q_goal = std::array<double, 7>{{0.228637, 0.275867, -0.772249, -2.61911, 2.58442, 1.73716, 0.993105}};
+            q_goal = std::array<double, 7>{{1.7268, -0.971922, -2.07316, -2.54811, 2.70629, 2.0402, -0.0750078}};
         }
         else if (type == "Left") {
             q_goal = std::array<double, 7>{{1.25711, 0.820966, -0.901313, -2.48992, -2.67695, 1.89659, 1.12316}};
@@ -557,10 +558,10 @@ int main(int argc, char** argv) {
     std::string ip_right = "192.168.1.101";
     std::string ip_left = "192.168.1.100";
 
-    // std::thread left_arm_run([&left_node, ip_left, &left_status](){arm_run(left_node, "Left", ip_left, &left_status);});
-    // arm_run(right_node, "Right", ip_right, &right_status);
-    arm_run(left_node, "Left", ip_left, &left_status);
-    // left_arm_run.join();
+    std::thread left_arm_run([&left_node, ip_left, &left_status](){arm_run(left_node, "Left", ip_left, &left_status);});
+    arm_run(right_node, "Right", ip_right, &right_status);
+    // arm_run(left_node, "Left", ip_left, &left_status);
+    left_arm_run.join();
 
     std::cout << "Done." << std::endl;
     
