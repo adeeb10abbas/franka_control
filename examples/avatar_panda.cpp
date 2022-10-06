@@ -97,6 +97,7 @@ class PTINode {
     int delay_cycle_previous;
     int max_buff_size = 2000;
     double wave_history[3][2000];
+    int delay_cycle;
 
     /* panda initialization */
     void teleInit(franka::Model& model) {
@@ -125,7 +126,8 @@ class PTINode {
         wave_damping = 10.0;
 
         delay_current_index = 0;
-        delay_cycle_previous = 3;
+        delay_cycle_previous = 2;
+        delay_cycle = 2;
         // max_buff_size = 2000;
         for (int i = 0; i < 3; i ++) {
             for (int j = 0; j < max_buff_size; j ++) {
@@ -185,7 +187,7 @@ class PTINode {
 
         int delay_index;
         int delay_difference;
-        int delay_cycle_current = 5;
+        int delay_cycle_current = 2;
 
         // translation part with wave variable
         position_d += twist_d.head(3) * sample_time;
@@ -361,19 +363,22 @@ void PTINode::publish_ptipacket() {
     packet_msg.twist.angular.y = twist[4];
     packet_msg.twist.angular.z = twist[5];
     // mtx.unlock();
+    packet_msg.timestamp = ros::Time::now().toSec();
 
-    // if (pti_packet_pub.getNumSubscribers() == 0) {
-    //     if (node_type == "master") {
-    //         ROS_ERROR_STREAM("Connection lost, trying to reconnect...");
-    //         pti_packet_pub.shutdown();
-    //         pti_packet_pub = nh_.advertise<franka_control::PTIPacket>("/pti_master_output", 1);
-    //     }
-    //     else if (node_type == "slave") {
-    //         ROS_ERROR_STREAM("Connection lost, trying to reconnect...");
-    //         pti_packet_pub.shutdown();
-    //         pti_packet_pub = nh_.advertise<franka_control::PTIPacket>("/pti_slave_output", 1);
-    //     }
-    // }
+    if (pti_packet_pub.getNumSubscribers() == 0) {
+        if (node_type == "Right") {
+            // ROS_ERROR_STREAM("Connection lost, trying to reconnect...");
+            pti_packet_pub.shutdown();
+            pti_packet_pub = nh_.advertise<franka_control::PTIPacket>("/pti_right_output", 1);
+            // pti_packet_sub = nh_.subscribe("/right_smarty_arm_output", 1, &PTINode::ptipacket_callback, this, ros::TransportHints().udp());
+        }
+        else if (node_type == "Left") {
+            // ROS_ERROR_STREAM("Connection lost, trying to reconnect...");
+            pti_packet_pub.shutdown();
+            pti_packet_pub = nh_.advertise<franka_control::PTIPacket>("/pti_left_output", 1);
+            // pti_packet_sub = nh_.subscribe("/left_smarty_arm_output", 1, &PTINode::ptipacket_callback, this, ros::TransportHints().udp());
+        }
+    }
 
     pti_packet_pub.publish(packet_msg);
 
@@ -391,7 +396,8 @@ void PTINode::ptipacket_callback(const franka_control::PTIPacket::ConstPtr &pack
     twist_in << packet_msg->twist.linear.x, packet_msg->twist.linear.y, packet_msg->twist.linear.z,\
                     packet_msg->twist.angular.x, packet_msg->twist.angular.y, packet_msg->twist.angular.z;
     // mtx.unlock();
-    ROS_INFO_THROTTLE(1, "Write into pti memory");
+    delay_cycle = (int)((ros::Time::now().toSec() - packet_msg->timestamp) / 1e-3 / 2);
+    // ROS_INFO_THROTTLE(1, "Write into pti memory");
 }
 
 /* Run loop */
@@ -407,12 +413,10 @@ void PTINode::ros_run(int* status) {
 }
 
 /* panda control */
-void panda_control(ros::NodeHandle& node, std::string type, std::string ip, int* status) {
+void panda_control(PTINode& pti, std::string type, std::string ip, int* status) {
 
     std::thread th_nullspaceControl;
     std::thread th_ros;
-
-    PTINode pti(node, type);
 
     std::cout << type << " node starts running" << std::endl;
 
@@ -506,9 +510,11 @@ void panda_control(ros::NodeHandle& node, std::string type, std::string ip, int*
 
         if (pti.th_nullspace_running) {
             th_nullspaceControl.join();
+            pti.th_nullspace_running = false;
         }
         if (pti.th_ros_running) {
             th_ros.join();
+            pti.th_ros_running = false;
         }
         std::cout << "All thread shut down" << std::endl;
         
@@ -519,8 +525,10 @@ void panda_control(ros::NodeHandle& node, std::string type, std::string ip, int*
 /* auto-recovery */
 void arm_run(ros::NodeHandle& node, std::string type, std::string ip, int* status) {
 
+    PTINode pti(node, type);
+
     while(!done) {
-        panda_control(node, type, ip, status);
+        panda_control(pti, type, ip, status);
         if (*status == 0) {
             std::cout << type << " panda control stop" << std::endl;
             break;
@@ -551,7 +559,6 @@ int main(int argc, char** argv) {
 
     ros::init(argc, argv, "pti_interface", ros::init_options::NoSigintHandler);
 
-    // ros::NodeHandle right_node("~");
     ros::NodeHandle left_node("~");
     ros::NodeHandle right_node("~");
 
