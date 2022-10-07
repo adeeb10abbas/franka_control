@@ -253,8 +253,8 @@ class PTINode {
     void jointLimit(void) {
         const std::array<double, 7> q_min_degree = {{-160.0, -90.0, -160.0, -160.0, -160.0, 5.0, -35.0}};
         const std::array<double, 7> q_max_degree = {{160.0, 90.0, 160.0, -15.0, 160.0, 209.0, 130.0}};
-        const std::array<double, 7> k_gains = {{400.0, 400.0, 400.0, 400.0, 50.0, 100.0, 50.0}};
-        const std::array<double, 7> d_gains = {{35.0, 35.0, 35.0, 35.0, 15.0, 20.0, 15.0}};
+        const std::array<double, 7> k_gains = {{400.0, 400.0, 400.0, 400.0, 50.0, 100.0, 20.0}};
+        const std::array<double, 7> d_gains = {{35.0, 35.0, 35.0, 35.0, 15.0, 20.0, 5.0}};
         double d2r = 180.0 / M_PI;
         std::array<double, 7> q_min_radian;
         std::array<double, 7> q_max_radian;
@@ -282,7 +282,7 @@ class PTINode {
     void nullHandling(int* status) {
 
         Eigen::MatrixXd jacobian_transpose_pinv;
-        double nullspace_stiffness_ = 2.0;
+        double nullspace_stiffness_ = 4.0;
 
         th_nullspace_running = true;
 
@@ -523,9 +523,9 @@ void panda_control(PTINode& pti, std::string type, std::string ip, int* status) 
 }
 
 /* auto-recovery */
-void arm_run(ros::NodeHandle& node, std::string type, std::string ip, int* status) {
+void arm_run(PTINode& pti, std::string type, std::string ip, int* status) {
 
-    PTINode pti(node, type);
+    // PTINode pti(node, type);
 
     while(!done) {
         panda_control(pti, type, ip, status);
@@ -545,30 +545,44 @@ void arm_run(ros::NodeHandle& node, std::string type, std::string ip, int* statu
 
 int main(int argc, char** argv) {
 
-    int right_status = 0;
-    int left_status = 0;
+    int status = 0;
 
     signal(SIGINT, signal_callback_handler);
 
     // Check whether the required arguments were passed
-    if (argc != 1) {
+    if (argc != 2) {
         std::cout << argc << std::endl;
-        std::cerr << "Usage: avatar_panda" << std::endl;
+        std::cerr << "Usage: avatar_panda && left or right" << std::endl;
         return -1;
     }
 
-    ros::init(argc, argv, "pti_interface", ros::init_options::NoSigintHandler);
+    // ros::init(argc, argv, "pti_interface", ros::init_options::NoSigintHandler);
 
-    ros::NodeHandle left_node("~");
-    ros::NodeHandle right_node("~");
+    if (std::string(argv[1]) == "left") {
+        ros::init(argc, argv, "pti_interface_left", ros::init_options::NoSigintHandler);
+        ros::NodeHandle node("~");
+        std::string ip = "192.168.1.100";
+        PTINode pti(node, "Left");
+        arm_run(pti, "Left", ip, &status);
+    }
+    else if (std::string(argv[1]) == "right") {
+        ros::init(argc, argv, "pti_interface_right", ros::init_options::NoSigintHandler);
+        ros::NodeHandle node("~");
+        std::string ip = "192.168.1.101";
+        PTINode pti(node, "Right");
+        arm_run(pti, "Right", ip, &status);
+    }
+    else {
+        std::cout << "Error: left or right arm not configured." << std::endl;
+        return -1;
+    }
 
-    std::string ip_right = "192.168.1.101";
-    std::string ip_left = "192.168.1.100";
-
-    std::thread left_arm_run([&left_node, ip_left, &left_status](){arm_run(left_node, "Left", ip_left, &left_status);});
-    arm_run(right_node, "Right", ip_right, &right_status);
+    // std::thread left_arm_run([&pti_left, ip_left, &left_status](){arm_run(pti_left, "Left", ip_left, &left_status);});
+    // arm_run(pti_right, "Right", ip_right, &right_status);
     // arm_run(left_node, "Left", ip_left, &left_status);
-    left_arm_run.join();
+    // left_arm_run.join();
+
+    ros::shutdown();
 
     std::cout << "Done." << std::endl;
     
