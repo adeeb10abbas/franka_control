@@ -62,6 +62,8 @@ class PTINode {
     Eigen::Matrix<double, 7, 1> tau;
     Eigen::Matrix<double, 7, 1> tau_nullspace;
     Eigen::Matrix<double, 7, 1> tau_wall;
+    Eigen::Matrix<double, 7, 1> tau_hose;
+    Eigen::Matrix<double, 6, 1> hose_gravity;
 
     /* robot initial state */
     franka::RobotState initial_state;
@@ -83,6 +85,7 @@ class PTINode {
 
     Eigen::Matrix<double, 7, 1> coriolis;
     Eigen::Matrix<double, 6, 7> jacobian;
+    Eigen::Matrix<double, 6, 7> joint5_jacobian;
 
     /* wave variable */
     Eigen::Vector3d wave_in;
@@ -111,6 +114,7 @@ class PTINode {
         std::cout << q0.transpose() << std::endl;
 
         jacobian = Eigen::Map<const Eigen::Matrix<double, 6, 7>>(model.zeroJacobian(franka::Frame::kEndEffector, initial_state).data());
+        joint5_jacobian = Eigen::Map<const Eigen::Matrix<double, 6, 7>>(model.zeroJacobian(franka::Frame::kJoint5, initial_state).data());
 
         position_d.setZero();
         twist_d.setZero();
@@ -135,6 +139,8 @@ class PTINode {
             }
         }
 
+        hose_gravity << 0.0, 0.0, 10.0, 0.0, 0.0, 0.0;
+
     }
 
     /* update robot endeffector state */
@@ -142,9 +148,11 @@ class PTINode {
 
         std::array<double, 7> coriolis_array = model.coriolis(robot_state);
         std::array<double, 42> jacobian_array = model.zeroJacobian(franka::Frame::kEndEffector, robot_state);
+        std::array<double, 42> joint5_jacobian_array = model.zeroJacobian(franka::Frame::kJoint5, robot_state);
 
         coriolis = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(coriolis_array.data());
         jacobian = Eigen::Map<const Eigen::Matrix<double, 6, 7>>(jacobian_array.data());
+        joint5_jacobian = Eigen::Map<const Eigen::Matrix<double, 6, 7>>(joint5_jacobian_array.data());
         q = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(robot_state.q.data());
         dq = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(robot_state.dq.data());
 
@@ -166,7 +174,10 @@ class PTINode {
         angle_relative_local << orientation_relative.x(), orientation_relative.y(), orientation_relative.z();
         angle_relative = transform.linear() * angle_relative_local;
 
+        // std::cout << angle_relative.transpose() << std::endl;
+
         twist = jacobian * dq;
+        tau_hose = joint5_jacobian.transpose() * hose_gravity;
     }
 
     /* slave wave variable controller */
@@ -178,7 +189,7 @@ class PTINode {
         double translation_stiffness = 1200.0;
         double translation_damping = 2.0 * 1.0 * std::sqrt(translation_stiffness * 1.0);
         double rotation_stiffness = 20.0;
-        double rotation_damping = 2.0 * 1.0 * std::sqrt(rotation_stiffness * 0.1);
+        double rotation_damping = 2.0 * 1.0 * std::sqrt(rotation_stiffness * 0.01);
 
         Eigen::Vector3d actual_position_error;
         Eigen::Vector3d predict_position_error;
@@ -246,7 +257,8 @@ class PTINode {
         // open loop rotation control
         force.tail(3) = -rotation_stiffness * (-angle_in - angle_relative) + rotation_damping * (twist_in.tail(3) - twist.tail(3));
         
-        tau = jacobian.transpose() * force + coriolis + tau_nullspace + tau_wall;
+        tau = jacobian.transpose() * force + coriolis + tau_nullspace + tau_wall + tau_hose;
+        // std::cout << force.transpose() << std::endl;
     }
 
     /* joint virtual wall limit*/
@@ -353,9 +365,9 @@ void PTINode::publish_ptipacket() {
     packet_msg.position.x = position_relative[0];
     packet_msg.position.y = position_relative[1];
     packet_msg.position.z = position_relative[2];
-    packet_msg.angle.x = angle_relative[0];
-    packet_msg.angle.y = angle_relative[1];
-    packet_msg.angle.z = angle_relative[2];
+    packet_msg.angle.x = -angle_relative[0];
+    packet_msg.angle.y = -angle_relative[1];
+    packet_msg.angle.z = -angle_relative[2];
     packet_msg.twist.linear.x = twist[0];
     packet_msg.twist.linear.y = twist[1];
     packet_msg.twist.linear.z = twist[2];
@@ -365,20 +377,20 @@ void PTINode::publish_ptipacket() {
     // mtx.unlock();
     packet_msg.timestamp = ros::Time::now().toSec();
 
-    if (pti_packet_pub.getNumSubscribers() == 0) {
-        if (node_type == "Right") {
-            // ROS_ERROR_STREAM("Connection lost, trying to reconnect...");
-            pti_packet_pub.shutdown();
-            pti_packet_pub = nh_.advertise<franka_control::PTIPacket>("/pti_right_output", 1);
-            // pti_packet_sub = nh_.subscribe("/right_smarty_arm_output", 1, &PTINode::ptipacket_callback, this, ros::TransportHints().udp());
-        }
-        else if (node_type == "Left") {
-            // ROS_ERROR_STREAM("Connection lost, trying to reconnect...");
-            pti_packet_pub.shutdown();
-            pti_packet_pub = nh_.advertise<franka_control::PTIPacket>("/pti_left_output", 1);
-            // pti_packet_sub = nh_.subscribe("/left_smarty_arm_output", 1, &PTINode::ptipacket_callback, this, ros::TransportHints().udp());
-        }
-    }
+    // if (pti_packet_pub.getNumSubscribers() == 0) {
+    //     if (node_type == "Right") {
+    //         // ROS_ERROR_STREAM("Connection lost, trying to reconnect...");
+    //         pti_packet_pub.shutdown();
+    //         pti_packet_pub = nh_.advertise<franka_control::PTIPacket>("/pti_right_output", 1);
+    //         // pti_packet_sub = nh_.subscribe("/right_smarty_arm_output", 1, &PTINode::ptipacket_callback, this, ros::TransportHints().udp());
+    //     }
+    //     else if (node_type == "Left") {
+    //         // ROS_ERROR_STREAM("Connection lost, trying to reconnect...");
+    //         pti_packet_pub.shutdown();
+    //         pti_packet_pub = nh_.advertise<franka_control::PTIPacket>("/pti_left_output", 1);
+    //         // pti_packet_sub = nh_.subscribe("/left_smarty_arm_output", 1, &PTINode::ptipacket_callback, this, ros::TransportHints().udp());
+    //     }
+    // }
 
     pti_packet_pub.publish(packet_msg);
 
@@ -425,20 +437,28 @@ void panda_control(PTINode& pti, std::string type, std::string ip, int* status) 
         franka::Robot robot(ip);
         robot.automaticErrorRecovery();
         setDefaultBehavior(robot);
+
+        // set collision behavior
+        robot.setCollisionBehavior({{100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0}},
+                                {{100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0}},
+                                {{100.0, 100.0, 100.0, 100.0, 100.0, 100.0}},
+                                {{100.0, 100.0, 100.0, 100.0, 100.0, 100.0}});
         
         // set external load
         if (type == "Right") {
-            const double load_mass = 2.0; // 2.5 fully filled
-            const std::array< double, 3 > F_x_Cload = {{0.0, 0.03, -0.06}};
-            const std::array< double, 9 > load_inertia = {{0.01395, 0.0, 0.0, 0.0, 0.01395, 0.0, 0.0, 0.0, 0.00125}};
-            // const std::array< double, 3 > F_x_Cload = {{0.0, 0.0, 0.0}};
-            // const std::array< double, 9 > load_inertia = {{0.001, 0.0, 0.0, 0.0, 0.001, 0.0, 0.0, 0.0, 0.001}};
+            const double load_mass = 1.0; // 2.5 fully filled
+            // const std::array< double, 3 > F_x_Cload = {{0.03, -0.01, -0.06}};
+            // const std::array< double, 9 > load_inertia = {{0.01395, 0.0, 0.0, 0.0, 0.01395, 0.0, 0.0, 0.0, 0.00125}};
+            const std::array< double, 3 > F_x_Cload = {{0.0, 0.0, 0.0}};
+            const std::array< double, 9 > load_inertia = {{0.001, 0.0, 0.0, 0.0, 0.001, 0.0, 0.0, 0.0, 0.001}};
             robot.setLoad(load_mass, F_x_Cload, load_inertia);
         }
         else if (type == "Left") {
-            const double load_mass = 2.0;
-            const std::array< double, 3 > F_x_Cload = {{0.0, 0.03, -0.06}};
-            const std::array< double, 9 > load_inertia = {{0.01395, 0.0, 0.0, 0.0, 0.01395, 0.0, 0.0, 0.0, 0.00125}};
+            const double load_mass = 1.0;
+            // const std::array< double, 3 > F_x_Cload = {{0.03, -0.01, -0.06}};
+            // const std::array< double, 9 > load_inertia = {{0.01395, 0.0, 0.0, 0.0, 0.01395, 0.0, 0.0, 0.0, 0.00125}};
+            const std::array< double, 3 > F_x_Cload = {{0.0, 0.0, 0.0}};
+            const std::array< double, 9 > load_inertia = {{0.001, 0.0, 0.0, 0.0, 0.001, 0.0, 0.0, 0.0, 0.001}};
             robot.setLoad(load_mass, F_x_Cload, load_inertia);
         }
         
@@ -457,12 +477,6 @@ void panda_control(PTINode& pti, std::string type, std::string ip, int* status) 
         std::cin.ignore();
         robot.control(motion_generator);
         std::cout << "Finished moving to initial joint configuration." << std::endl;
-
-        // set collision behavior
-        robot.setCollisionBehavior({{100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0}},
-                                {{100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0}},
-                                {{100.0, 100.0, 100.0, 100.0, 100.0, 100.0}},
-                                {{100.0, 100.0, 100.0, 100.0, 100.0, 100.0}});
 
         // load the kinematics and dynamics model
         franka::Model model = robot.loadModel();
@@ -506,7 +520,7 @@ void panda_control(PTINode& pti, std::string type, std::string ip, int* status) 
         *status = -1;
         std::cout << type << " arm error, waiting for recovery..." << std::endl;
 
-        std::cout << *status << std::endl;
+        // std::cout << *status << std::endl;
 
         if (pti.th_nullspace_running) {
             th_nullspaceControl.join();
