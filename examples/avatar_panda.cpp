@@ -265,8 +265,8 @@ class PTINode {
     void jointLimit(void) {
         const std::array<double, 7> q_min_degree = {{-160.0, -90.0, -160.0, -160.0, -160.0, 5.0, -35.0}};
         const std::array<double, 7> q_max_degree = {{160.0, 90.0, 160.0, -15.0, 160.0, 209.0, 130.0}};
-        const std::array<double, 7> k_gains = {{400.0, 400.0, 400.0, 400.0, 50.0, 100.0, 20.0}};
-        const std::array<double, 7> d_gains = {{35.0, 35.0, 35.0, 35.0, 15.0, 20.0, 5.0}};
+        const std::array<double, 7> k_gains = {{100.0, 100.0, 100.0, 100.0, 50.0, 50.0, 20.0}};
+        const std::array<double, 7> d_gains = {{15.0, 15.0, 15.0, 15.0, 10.0, 10.0, 5.0}};
         double d2r = 180.0 / M_PI;
         std::array<double, 7> q_min_radian;
         std::array<double, 7> q_max_radian;
@@ -575,14 +575,14 @@ int main(int argc, char** argv) {
     if (std::string(argv[1]) == "left") {
         ros::init(argc, argv, "pti_interface_left", ros::init_options::NoSigintHandler);
         ros::NodeHandle node("~");
-        std::string ip = "192.168.1.100";
+        std::string ip = "10.180.1.100";
         PTINode pti(node, "Left");
         arm_run(pti, "Left", ip, &status);
     }
     else if (std::string(argv[1]) == "right") {
         ros::init(argc, argv, "pti_interface_right", ros::init_options::NoSigintHandler);
         ros::NodeHandle node("~");
-        std::string ip = "192.168.1.101";
+        std::string ip = "10.180.1.101";
         PTINode pti(node, "Right");
         arm_run(pti, "Right", ip, &status);
     }
