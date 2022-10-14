@@ -144,7 +144,7 @@ class PTINode {
         }
         sample_time = 1e-3;
 
-        hose_gravity << 0.0, 0.0, 10.0, 0.0, 0.0, 0.0;
+        hose_gravity << 0.0, 0.0, 15.0, 0.0, 0.0, 0.0;
 
     }
 
@@ -202,7 +202,8 @@ class PTINode {
 
         int delay_index;
         int delay_difference;
-        int delay_cycle_current = 2;
+        int delay_cycle_current;
+        delay_cycle_current = 2;
 
         // translation part with wave variable
         position_d += twist_d.head(3) * sample_time;
@@ -269,9 +270,14 @@ class PTINode {
     }
 
     /* joint virtual wall limit*/
-    void jointLimit(void) {
-        const std::array<double, 7> q_min_degree = {{-160.0, -90.0, -160.0, -160.0, -160.0, 5.0, -35.0}};
-        const std::array<double, 7> q_max_degree = {{160.0, 90.0, 160.0, -15.0, 160.0, 209.0, 130.0}};
+    void jointLimit(std::string type) {
+        std::array<double, 7> q_min_degree = {{-160.0, -90.0, -160.0, -160.0, -160.0, 5.0, -35.0}};
+        std::array<double, 7> q_max_degree = {{160.0, 90.0, 160.0, -15.0, 160.0, 209.0, 130.0}};
+        if (type == "Right") {
+            q_min_degree[6] = -50.0;
+            q_max_degree[6] = 115.0;
+        }
+
         const std::array<double, 7> k_gains = {{100.0, 100.0, 100.0, 100.0, 50.0, 50.0, 20.0}};
         const std::array<double, 7> d_gains = {{15.0, 15.0, 15.0, 15.0, 10.0, 10.0, 5.0}};
         double d2r = 180.0 / M_PI;
@@ -283,11 +289,11 @@ class PTINode {
             q_max_radian[i] = q_max_degree[i] / d2r;
             if (q[i] < q_min_radian[i]) {
                 tau_wall[i] = (k_gains[i] * (q_min_radian[i] - q[i]) - d_gains[i] * dq[i]);
-                // std::cout << "Joint [" << i << "] reach lower limit" << std::endl;
+                std::cout << "Joint [" << i << "] reach lower limit at time: " << ros::Time::now() << std::endl;
             }
             else if (q[i] > q_max_radian[i]) {
                 tau_wall[i] = (k_gains[i] * (q_max_radian[i] - q[i]) - d_gains[i] * dq[i]);
-                // std::cout << "Joint [" << i << "] reach upper limit" << std::endl;
+                std::cout << "Joint [" << i << "] reach upper limit at time: " << ros::Time::now() << std::endl;
             }
             else {
                 tau_wall[i] = 0.0;
@@ -301,7 +307,7 @@ class PTINode {
     void nullHandling(int* status) {
 
         Eigen::MatrixXd jacobian_transpose_pinv;
-        double nullspace_stiffness_ = 4.0;
+        double nullspace_stiffness_ = 10.0;
 
         th_nullspace_running = true;
 
@@ -340,9 +346,9 @@ class PTINode {
         Eigen::Matrix<double, 7, 1> result;
         std::array<double, 7> limited_val{};
         std::array<double, 7> val_derivatives{};
-        double max_derivatives = 500.0;
-        double max = 80.0;
-        double min = -80.0;
+        double max_derivatives = 900.0;
+        double max = 90.0;
+        double min = -90.0;
         for (int i = 0; i < 7; i ++) {
             val_derivatives[i] = (val[i] - last_val[i]) / sample_time;
             limited_val[i] = last_val[i] + std::max(std::min(val_derivatives[i], max_derivatives), -max_derivatives) * sample_time;
@@ -357,7 +363,7 @@ class PTINode {
         std::array<double, 6> max = {{95.0, 100.0, 150.0, 10.0, 10.0, 10.0}};
 
         for (int i = 0; i < 6; i ++) {
-            result[i] = std::min(std::max(val[i], min[i] / 5.0), max[i] / 5.0);
+            result[i] = std::min(std::max(val[i], min[i] / 2.0), max[i] / 2.0);
         }
         return result;
     }
@@ -521,10 +527,10 @@ void panda_control(PTINode& pti, std::string type, std::string ip, int* status) 
         franka::Torques zero_torques{{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
 
         std::function<franka::Torques(const franka::RobotState&, franka::Duration)>
-            impedance_control_callback = [&pti, &model, zero_torques](const franka::RobotState& robot_state, franka::Duration period) -> franka::Torques 
+            impedance_control_callback = [&pti, &model, zero_torques, type](const franka::RobotState& robot_state, franka::Duration period) -> franka::Torques 
         {
             pti.robotStateUpdate(model, robot_state);
-            pti.jointLimit();
+            pti.jointLimit(type);
             pti.sTeleController();
 
             std::array<double, 7> tau_d_array{};
