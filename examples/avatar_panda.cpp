@@ -60,6 +60,8 @@ class PTINode {
     Eigen::Matrix<double, 7, 1> q0;
     Eigen::Matrix<double, 7, 1> dq;
     Eigen::Matrix<double, 7, 1> tau;
+    Eigen::Matrix<double, 7, 1> last_tau;
+
     Eigen::Matrix<double, 7, 1> tau_nullspace;
     Eigen::Matrix<double, 7, 1> tau_wall;
     Eigen::Matrix<double, 7, 1> tau_hose;
@@ -101,6 +103,7 @@ class PTINode {
     int max_buff_size = 2000;
     double wave_history[3][2000];
     int delay_cycle;
+    double sample_time;
 
     /* panda initialization */
     void teleInit(franka::Model& model) {
@@ -125,6 +128,7 @@ class PTINode {
         twist_in.setZero();
         tau_nullspace.setZero();
         tau.setZero();
+        last_tau.setZero();
         tau_wall.setZero();
 
         wave_damping = 10.0;
@@ -138,6 +142,7 @@ class PTINode {
                 wave_history[i][j] = 0.0;
             }
         }
+        sample_time = 1e-3;
 
         hose_gravity << 0.0, 0.0, 10.0, 0.0, 0.0, 0.0;
 
@@ -184,7 +189,6 @@ class PTINode {
     void sTeleController(void) {
 
         int num = 3;
-        double sample_time = 1e-3;
         double lambda = 10.0;
         double translation_stiffness = 1200.0;
         double translation_damping = 2.0 * 1.0 * std::sqrt(translation_stiffness * 1.0);
@@ -256,9 +260,12 @@ class PTINode {
 
         // open loop rotation control
         force.tail(3) = -rotation_stiffness * (-angle_in - angle_relative) + rotation_damping * (twist_in.tail(3) - twist.tail(3));
+        force = force_regulation(force);
         
         tau = jacobian.transpose() * force + coriolis + tau_nullspace + tau_wall + tau_hose;
-        // std::cout << force.transpose() << std::endl;
+        tau = torque_regulation(tau, last_tau);
+        last_tau = tau;
+
     }
 
     /* joint virtual wall limit*/
@@ -329,6 +336,31 @@ class PTINode {
         M_pinv_ = Eigen::MatrixXd(svd.matrixV() * S_.transpose() * svd.matrixU().transpose());
     }
 
+    Eigen::Matrix<double, 7, 1> torque_regulation(Eigen::Matrix<double, 7, 1> val, Eigen::Matrix<double, 7, 1> last_val) {
+        Eigen::Matrix<double, 7, 1> result;
+        std::array<double, 7> limited_val{};
+        std::array<double, 7> val_derivatives{};
+        double max_derivatives = 500.0;
+        double max = 80.0;
+        double min = -80.0;
+        for (int i = 0; i < 7; i ++) {
+            val_derivatives[i] = (val[i] - last_val[i]) / sample_time;
+            limited_val[i] = last_val[i] + std::max(std::min(val_derivatives[i], max_derivatives), -max_derivatives) * sample_time;
+            result[i] = std::min(std::max(limited_val[i], min), max);
+        }
+        return result;
+    }
+
+    Eigen::Matrix<double, 6, 1> force_regulation(Eigen::Matrix<double, 6, 1> val) {
+        Eigen::Matrix<double, 6, 1> result;
+        std::array<double, 6> min = {{-125.0, -100.0, -50.0, -10.0, -10.0, -10.0}};
+        std::array<double, 6> max = {{95.0, 100.0, 150.0, 10.0, 10.0, 10.0}};
+
+        for (int i = 0; i < 6; i ++) {
+            result[i] = std::min(std::max(val[i], min[i] / 5.0), max[i] / 5.0);
+        }
+        return result;
+    }
 };
 
 /* Panda teleop interface */
@@ -355,12 +387,14 @@ PTINode::PTINode(ros::NodeHandle& node, std::string type): node_type(type) {
 void PTINode::publish_ptipacket() {
     franka_control::PTIPacket packet_msg;
     packet_msg.wave.resize(3);
-    packet_msg.test.resize(3);
+    packet_msg.test.resize(7);
 
     // mtx.lock();
     for (int i = 0; i < 3; i ++) {
         packet_msg.wave[i] = wave_out[i];
-        packet_msg.test[i] = force[i];
+    }
+    for (int i = 0; i < 7; i ++) {
+        packet_msg.test[i] = tau[i];
     }
     packet_msg.position.x = position_relative[0];
     packet_msg.position.y = position_relative[1];
@@ -492,7 +526,6 @@ void panda_control(PTINode& pti, std::string type, std::string ip, int* status) 
             pti.robotStateUpdate(model, robot_state);
             pti.jointLimit();
             pti.sTeleController();
-
 
             std::array<double, 7> tau_d_array{};
             Eigen::VectorXd::Map(&tau_d_array[0], 7) = pti.tau;
