@@ -144,7 +144,7 @@ class PTINode {
         }
         sample_time = 1e-3;
 
-        hose_gravity << 0.0, 0.0, 15.0, 0.0, 0.0, 0.0;
+        hose_gravity << 0.0, 0.0, 10.0, 0.0, 0.0, 0.0;
 
     }
 
@@ -346,9 +346,9 @@ class PTINode {
         Eigen::Matrix<double, 7, 1> result;
         std::array<double, 7> limited_val{};
         std::array<double, 7> val_derivatives{};
-        double max_derivatives = 900.0;
-        double max = 90.0;
-        double min = -90.0;
+        double max_derivatives = 800.0;
+        double max = 80.0;
+        double min = -80.0;
         for (int i = 0; i < 7; i ++) {
             val_derivatives[i] = (val[i] - last_val[i]) / sample_time;
             limited_val[i] = last_val[i] + std::max(std::min(val_derivatives[i], max_derivatives), -max_derivatives) * sample_time;
@@ -521,6 +521,10 @@ void panda_control(PTINode& pti, std::string type, std::string ip, int* status) 
         // load the kinematics and dynamics model
         franka::Model model = robot.loadModel();
         pti.initial_state = robot.readOnce();
+
+        std::array<double, 16> ee = {{1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.08, -0.08, 0.0, 1.0}};
+        robot.setEE(ee);
+
         pti.teleInit(model);
         std::cout << type << " PTI class initialized" << std::endl;
 
