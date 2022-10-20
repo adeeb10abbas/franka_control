@@ -29,13 +29,13 @@
 #include "std_msgs/Bool.h"
 #include "franka_control/PTIPacket.h"
 
-bool done = false;
+volatile sig_atomic_t done = 0;
 
 void signal_callback_handler(int signum) {
     std::cout << "CTRL+C interrupted. " << std::endl;
     // Terminate program
     if (signum == SIGINT) {
-        done = true;
+        done = 1;
     }
 }
 
@@ -44,6 +44,7 @@ class PTINode {
 
     explicit PTINode(ros::NodeHandle& node, std::string type);
     void ros_run(int* status);
+    void slow_catching(void);
     ros::NodeHandle nh_;
     ros::Subscriber pti_packet_sub;
     ros::Publisher pti_packet_pub;
@@ -144,8 +145,7 @@ class PTINode {
         }
         sample_time = 1e-3;
 
-        hose_gravity << 0.0, 0.0, 10.0, 0.0, 0.0, 0.0;
-
+        hose_gravity.setZero();
     }
 
     /* update robot endeffector state */
@@ -194,6 +194,8 @@ class PTINode {
         double translation_damping = 2.0 * 1.0 * std::sqrt(translation_stiffness * 1.0);
         double rotation_stiffness = 20.0;
         double rotation_damping = 2.0 * 1.0 * std::sqrt(rotation_stiffness * 0.01);
+        double torque_ratio = 0.8;
+        double force_ratio = 0.5;
 
         Eigen::Vector3d actual_position_error;
         Eigen::Vector3d predict_position_error;
@@ -203,7 +205,7 @@ class PTINode {
         int delay_index;
         int delay_difference;
         int delay_cycle_current;
-        delay_cycle_current = 2;
+        delay_cycle_current = 4;
 
         // translation part with wave variable
         position_d += twist_d.head(3) * sample_time;
@@ -261,22 +263,19 @@ class PTINode {
 
         // open loop rotation control
         force.tail(3) = -rotation_stiffness * (-angle_in - angle_relative) + rotation_damping * (twist_in.tail(3) - twist.tail(3));
-        force = force_regulation(force);
+        force = force_regulation(force, force_ratio);
         
         tau = jacobian.transpose() * force + coriolis + tau_nullspace + tau_wall + tau_hose;
-        tau = torque_regulation(tau, last_tau);
+        // tau = jacobian.transpose() * force + coriolis + tau_nullspace + tau_wall;
+        tau = torque_regulation(tau, last_tau, torque_ratio);
         last_tau = tau;
 
     }
 
     /* joint virtual wall limit*/
     void jointLimit(std::string type) {
-        std::array<double, 7> q_min_degree = {{-160.0, -90.0, -160.0, -160.0, -160.0, 5.0, -35.0}};
-        std::array<double, 7> q_max_degree = {{160.0, 90.0, 160.0, -15.0, 160.0, 209.0, 130.0}};
-        if (type == "Right") {
-            q_min_degree[6] = -50.0;
-            q_max_degree[6] = 115.0;
-        }
+        std::array<double, 7> q_min_degree = {{-160.0, -90.0, -160.0, -160.0, -160.0, 5.0, -160.0}};
+        std::array<double, 7> q_max_degree = {{160.0, 90.0, 160.0, -15.0, 160.0, 209.0, 160.0}};
 
         const std::array<double, 7> k_gains = {{100.0, 100.0, 100.0, 100.0, 50.0, 50.0, 20.0}};
         const std::array<double, 7> d_gains = {{15.0, 15.0, 15.0, 15.0, 10.0, 10.0, 5.0}};
@@ -307,7 +306,7 @@ class PTINode {
     void nullHandling(int* status) {
 
         Eigen::MatrixXd jacobian_transpose_pinv;
-        double nullspace_stiffness_ = 10.0;
+        double nullspace_stiffness_ = 1.0;
 
         th_nullspace_running = true;
 
@@ -342,13 +341,13 @@ class PTINode {
         M_pinv_ = Eigen::MatrixXd(svd.matrixV() * S_.transpose() * svd.matrixU().transpose());
     }
 
-    Eigen::Matrix<double, 7, 1> torque_regulation(Eigen::Matrix<double, 7, 1> val, Eigen::Matrix<double, 7, 1> last_val) {
+    Eigen::Matrix<double, 7, 1> torque_regulation(Eigen::Matrix<double, 7, 1> val, Eigen::Matrix<double, 7, 1> last_val, double ratio) {
         Eigen::Matrix<double, 7, 1> result;
         std::array<double, 7> limited_val{};
         std::array<double, 7> val_derivatives{};
-        double max_derivatives = 800.0;
-        double max = 80.0;
-        double min = -80.0;
+        double max_derivatives = 1000.0 * ratio;
+        double max = 100.0 * ratio;
+        double min = -100.0 * ratio;
         for (int i = 0; i < 7; i ++) {
             val_derivatives[i] = (val[i] - last_val[i]) / sample_time;
             limited_val[i] = last_val[i] + std::max(std::min(val_derivatives[i], max_derivatives), -max_derivatives) * sample_time;
@@ -357,13 +356,13 @@ class PTINode {
         return result;
     }
 
-    Eigen::Matrix<double, 6, 1> force_regulation(Eigen::Matrix<double, 6, 1> val) {
+    Eigen::Matrix<double, 6, 1> force_regulation(Eigen::Matrix<double, 6, 1> val, double ratio) {
         Eigen::Matrix<double, 6, 1> result;
         std::array<double, 6> min = {{-125.0, -100.0, -50.0, -10.0, -10.0, -10.0}};
         std::array<double, 6> max = {{95.0, 100.0, 150.0, 10.0, 10.0, 10.0}};
 
         for (int i = 0; i < 6; i ++) {
-            result[i] = std::min(std::max(val[i], min[i] / 2.0), max[i] / 2.0);
+            result[i] = std::min(std::max(val[i], min[i] * ratio), max[i] * ratio);
         }
         return result;
     }
@@ -444,9 +443,9 @@ void PTINode::ptipacket_callback(const franka_control::PTIPacket::ConstPtr &pack
         wave_in[i] = packet_msg->wave[i];
     }
     position_in << packet_msg->position.x, packet_msg->position.y, packet_msg->position.z;
-    angle_in << packet_msg->angle.x, packet_msg->angle.y, packet_msg->angle.z;
+    angle_in << packet_msg->angle.x / 2.0, packet_msg->angle.y / 2.0, packet_msg->angle.z / 2.0;
     twist_in << packet_msg->twist.linear.x, packet_msg->twist.linear.y, packet_msg->twist.linear.z,\
-                    packet_msg->twist.angular.x, packet_msg->twist.angular.y, packet_msg->twist.angular.z;
+                    packet_msg->twist.angular.x / 2.0, packet_msg->twist.angular.y / 2.0, packet_msg->twist.angular.z / 2.0;
     // mtx.unlock();
     delay_cycle = (int)((ros::Time::now().toSec() - packet_msg->timestamp) / 1e-3 / 2);
     // ROS_INFO_THROTTLE(1, "Write into pti memory");
@@ -462,6 +461,54 @@ void PTINode::ros_run(int* status) {
         ros::spinOnce();
         loop_rate.sleep();
     }
+    wave_out.setZero();
+    publish_ptipacket();
+}
+
+/* Slow catching */
+void PTINode::slow_catching(void) {
+    int num = 3;
+    double lambda = 10.0;
+    double translation_stiffness = 3000.0;
+    double translation_damping = 2.0 * 1.0 * std::sqrt(translation_stiffness * 1.0);
+    double rotation_stiffness = 300.0;
+    double rotation_damping = 2.0 * 1.0 * std::sqrt(rotation_stiffness * 0.01);
+    double torque_ratio = 0.9;
+    double force_ratio = 0.2;
+
+    double regulate_translation_velocity = 5.0;
+    double regulate_rotation_velocity = 8.0;
+
+    Eigen::Vector3d position_target;
+    Eigen::Vector3d angle_target;
+
+    for (int i = 0; i < 3; i ++) {
+        if (position_in[i] > position_relative[i]) {
+            position_target[i] = std::min(position_in[i], position_relative[i] + regulate_translation_velocity * sample_time);
+        }
+        else {
+            position_target[i] = std::max(position_in[i], position_relative[i] - regulate_translation_velocity * sample_time);
+        }
+
+        if (angle_in[i] > -angle_relative[i]) {
+            angle_target[i] = std::min(angle_in[i], -angle_relative[i] + regulate_rotation_velocity * sample_time); 
+        }
+        else {
+            angle_target[i] = std::max(angle_in[i], -angle_relative[i] - regulate_rotation_velocity * sample_time);
+        }
+    }
+
+    // std::cout << angle_in.transpose() + angle_relative.transpose() << std::endl;
+
+    force.head(3) = translation_stiffness * (position_target - position_relative) + translation_damping * (-twist.head(3));
+
+    force.tail(3) = rotation_stiffness * (angle_target + angle_relative) + rotation_damping * (-twist.tail(3));
+    force = force_regulation(force, force_ratio);
+    
+    tau = jacobian.transpose() * force + coriolis + tau_hose + tau_wall;
+    tau = torque_regulation(tau, last_tau, torque_ratio);
+    last_tau = tau;
+
 }
 
 /* panda control */
@@ -486,7 +533,7 @@ void panda_control(PTINode& pti, std::string type, std::string ip, int* status) 
         
         // set external load
         if (type == "Right") {
-            const double load_mass = 1.0; // 2.5 fully filled
+            const double load_mass = 0.9; // 2.5 fully filled
             // const std::array< double, 3 > F_x_Cload = {{0.03, -0.01, -0.06}};
             // const std::array< double, 9 > load_inertia = {{0.01395, 0.0, 0.0, 0.0, 0.01395, 0.0, 0.0, 0.0, 0.00125}};
             const std::array< double, 3 > F_x_Cload = {{0.0, 0.0, 0.0}};
@@ -494,7 +541,7 @@ void panda_control(PTINode& pti, std::string type, std::string ip, int* status) 
             robot.setLoad(load_mass, F_x_Cload, load_inertia);
         }
         else if (type == "Left") {
-            const double load_mass = 1.0;
+            const double load_mass = 0.9;
             // const std::array< double, 3 > F_x_Cload = {{0.03, -0.01, -0.06}};
             // const std::array< double, 9 > load_inertia = {{0.01395, 0.0, 0.0, 0.0, 0.01395, 0.0, 0.0, 0.0, 0.00125}};
             const std::array< double, 3 > F_x_Cload = {{0.0, 0.0, 0.0}};
@@ -505,10 +552,10 @@ void panda_control(PTINode& pti, std::string type, std::string ip, int* status) 
         // First move the robot to a suitable joint configuration
         std::array<double, 7> q_goal;
         if (type == "Right") {
-            q_goal = std::array<double, 7>{{1.7268, -0.971922, -2.07316, -2.54811, 2.70629, 2.0402, -0.0750078}};
+            q_goal = std::array<double, 7>{{0.0, 0.0, 0.0, -2.7, 1.5708, 1.5708, -2.0}};
         }
         else if (type == "Left") {
-            q_goal = std::array<double, 7>{{1.25711, 0.820966, -0.901313, -2.48992, -2.67695, 1.89659, 1.12316}};
+            q_goal = std::array<double, 7>{{0.0, 0.0, 0.0, -2.7, -1.5708, 1.5708, 0.4}};
         }
         MotionGenerator motion_generator(0.3, q_goal);
         std::cout << "WARNING: " << type << " arm starts moving."
@@ -518,41 +565,95 @@ void panda_control(PTINode& pti, std::string type, std::string ip, int* status) 
         robot.control(motion_generator);
         std::cout << "Finished moving to initial joint configuration." << std::endl;
 
+        if (type == "Right") {
+            std::array<double, 16> ee = {{1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.05, 1.0}};
+            robot.setEE(ee);
+        }
+        else if (type == "Left") {
+            std::array<double, 16> ee = {{1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.05, 1.0}};
+            robot.setEE(ee);
+        }
+
         // load the kinematics and dynamics model
         franka::Model model = robot.loadModel();
         pti.initial_state = robot.readOnce();
 
-        std::array<double, 16> ee = {{1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.08, -0.08, 0.0, 1.0}};
-        robot.setEE(ee);
-
         pti.teleInit(model);
         std::cout << type << " PTI class initialized" << std::endl;
 
+        if (type == "Right") {
+            pti.hose_gravity[2] = 8.0;
+        }
+        else if (type == "Left") {
+            pti.hose_gravity[2] = 10.0;
+        }
+
         franka::Torques zero_torques{{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
 
+        // slow catching smarty arm
         std::function<franka::Torques(const franka::RobotState&, franka::Duration)>
             impedance_control_callback = [&pti, &model, zero_torques, type](const franka::RobotState& robot_state, franka::Duration period) -> franka::Torques 
         {
+            /* ctrl+c finish running */
+            if (done) {
+                std::cout << std::endl << "Ctrl + c entered, shutting down slow catching" << std::endl;
+                return franka::MotionFinished(zero_torques);
+            }
             pti.robotStateUpdate(model, robot_state);
             pti.jointLimit(type);
-            pti.sTeleController();
+            pti.slow_catching();
 
             std::array<double, 7> tau_d_array{};
             Eigen::VectorXd::Map(&tau_d_array[0], 7) = pti.tau;
 
+            double position_error = std::sqrt((pti.position_in[0] - pti.position_relative[0]) * (pti.position_in[0] - pti.position_relative[0])
+                                            + (pti.position_in[1] - pti.position_relative[1]) * (pti.position_in[1] - pti.position_relative[1])
+                                            + (pti.position_in[2] - pti.position_relative[2]) * (pti.position_in[2] - pti.position_relative[2]));
+            double angle_error = std::sqrt((pti.angle_in[0] + pti.angle_relative[0]) * (pti.angle_in[0] + pti.angle_relative[0])
+                                        + (pti.angle_in[1] + pti.angle_relative[1]) * (pti.angle_in[1] + pti.angle_relative[1])
+                                        + (pti.angle_in[2] + pti.angle_relative[2]) * (pti.angle_in[2] + pti.angle_relative[2]));
+
+            double position_threshold = 0.02;
+            double angle_threshold = 0.05;
+
+            std::cout << "position error: " << position_error << " , angle error: " << angle_error << std::endl;
+            if ((position_error < position_threshold) && (angle_error < angle_threshold)) {
+                std::cout << std::endl << "Homing position reached, starting teleop" << std::endl;
+                pti.tau = pti.coriolis;
+                franka::Torques homing_stop_torque{{pti.tau[0], pti.tau[1], pti.tau[2], pti.tau[3], pti.tau[4], pti.tau[5], pti.tau[6]}};
+                return franka::MotionFinished(homing_stop_torque);
+            }
+
+            return tau_d_array;
+        };
+
+        th_nullspaceControl = std::thread([&pti, status](){pti.nullHandling(status);});
+        th_ros = std::thread([&pti, status](){pti.ros_run(status);});
+        robot.control(impedance_control_callback);
+
+        pti.position_d = pti.position_in;
+        pti.last_tau.setZero();
+
+        std::function<franka::Torques(const franka::RobotState&, franka::Duration)>
+            tele_control_callback = [&pti, &model, zero_torques, type](const franka::RobotState& robot_state, franka::Duration period) -> franka::Torques 
+        {
             /* ctrl+c finish running */
             if (done) {
                 std::cout << std::endl << "Finished task, shutting down operation" << std::endl;
                 return franka::MotionFinished(zero_torques);
             }
 
+            pti.robotStateUpdate(model, robot_state);
+            pti.jointLimit(type);
+            pti.sTeleController();
+
+            std::array<double, 7> tau_d_array{};
+            Eigen::VectorXd::Map(&tau_d_array[0], 7) = pti.tau;
             return tau_d_array;
         };
 
         std::cout << type << " panda teleop controller starts running" << std::endl;
-        th_nullspaceControl = std::thread([&pti, status](){pti.nullHandling(status);});
-        th_ros = std::thread([&pti, status](){pti.ros_run(status);});
-        robot.control(impedance_control_callback);
+        robot.control(tele_control_callback);
 
         th_ros.join(); pti.th_ros_running = false;
         th_nullspaceControl.join(); pti.th_nullspace_running = false;
