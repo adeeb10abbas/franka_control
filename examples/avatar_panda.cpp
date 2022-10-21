@@ -28,6 +28,7 @@
 #include "geometry_msgs/Twist.h"
 #include "std_msgs/Bool.h"
 #include "franka_control/PTIPacket.h"
+#include "franka_control/PInfo.h"
 
 volatile sig_atomic_t done = 0;
 
@@ -48,13 +49,16 @@ class PTINode {
     ros::NodeHandle nh_;
     ros::Subscriber pti_packet_sub;
     ros::Publisher pti_packet_pub;
+    ros::Publisher pinfo_pub;
     std::string node_type;
     void publish_ptipacket();
+    void publish_pinfo();
     void ptipacket_callback(const franka_control::PTIPacket::ConstPtr &msg);
     std::mutex mtx;
 
     bool th_nullspace_running = false;
     bool th_ros_running = false;
+    int slow_catching_flag = 0;
 
     /* robot joint state */
     Eigen::Matrix<double, 7, 1> q;
@@ -376,11 +380,13 @@ PTINode::PTINode(ros::NodeHandle& node, std::string type): node_type(type) {
         ROS_INFO("Launch ros interface as right panda");
         pti_packet_sub = nh_.subscribe("/right_smarty_arm_output", 1, &PTINode::ptipacket_callback, this, ros::TransportHints().udp());
         pti_packet_pub = nh_.advertise<franka_control::PTIPacket>("/pti_right_output", 1);
+        pinfo_pub = nh_.advertise<franka_control::PInfo>("/right_panda_info", 1);
     }
     else if (node_type == "Left") {
         ROS_INFO("Launch ros interface as left panda");
         pti_packet_sub = nh_.subscribe("/left_smarty_arm_output", 1, &PTINode::ptipacket_callback, this, ros::TransportHints().udp());
         pti_packet_pub = nh_.advertise<franka_control::PTIPacket>("/pti_left_output", 1);
+        pinfo_pub = nh_.advertise<franka_control::PInfo>("/left_panda_info", 1);
     }
 
     ROS_INFO("Node initialized");
@@ -435,6 +441,13 @@ void PTINode::publish_ptipacket() {
 
 }
 
+void PTINode::publish_pinfo() {
+    franka_control::PInfo info_msg;
+    info_msg.external_load_mass = std::max((est_ext_force[2] - 9.0) / 10.0, 0.0);
+    info_msg.slow_catching_index = slow_catching_flag;
+    pinfo_pub.publish(info_msg);
+}
+
 /* Subscriber callback */
 void PTINode::ptipacket_callback(const franka_control::PTIPacket::ConstPtr &packet_msg) {
 
@@ -458,6 +471,7 @@ void PTINode::ros_run(int* status) {
     while (!done && *status == 0) {
         // signal(SIGINT, signal_callback_handler);
         publish_ptipacket();
+        publish_pinfo();
         ros::spinOnce();
         loop_rate.sleep();
     }
@@ -629,7 +643,10 @@ void panda_control(PTINode& pti, std::string type, std::string ip, int* status) 
 
         th_nullspaceControl = std::thread([&pti, status](){pti.nullHandling(status);});
         th_ros = std::thread([&pti, status](){pti.ros_run(status);});
+
+        pti.slow_catching_flag = 1;
         robot.control(impedance_control_callback);
+        pti.slow_catching_flag = 0;
 
         pti.position_d = pti.position_in;
         pti.last_tau.setZero();

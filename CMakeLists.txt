@@ -19,6 +19,7 @@ add_message_files(
   msg
   FILES
   PTIPacket.msg
+  PInfo.msg
 )
 
 generate_messages(
