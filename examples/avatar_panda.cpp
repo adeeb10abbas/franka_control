@@ -26,6 +26,7 @@
 #include "ros/ros.h"
 #include "geometry_msgs/Point.h"
 #include "geometry_msgs/Twist.h"
+#include "geometry_msgs/Quaternion.h"
 #include "std_msgs/Bool.h"
 #include "franka_control/PTIPacket.h"
 #include "franka_control/PInfo.h"
@@ -84,7 +85,7 @@ class PTINode {
     Eigen::Vector3d position_d;
     Eigen::Quaterniond orientation;
     Eigen::Vector3d position_relative;
-    Eigen::Vector3d angle_relative;
+    Eigen::Vector3d quat_error;
     Eigen::Matrix<double, 6, 1> twist;
     Eigen::Matrix<double, 6, 1> twist_d;
     Eigen::Matrix<double, 6, 1> force;
@@ -99,7 +100,7 @@ class PTINode {
     Eigen::Vector3d wave_out;
     Eigen::Vector3d wave_integral;
     Eigen::Vector3d position_in;
-    Eigen::Vector3d angle_in;
+    Eigen::Vector3d quat_in;
     Eigen::Matrix<double, 6, 1> twist_in;
     double wave_damping;
 
@@ -129,7 +130,7 @@ class PTINode {
         wave_in.setZero();
         wave_integral.setZero();
         position_in.setZero();
-        angle_in.setZero();
+        quat_in.setZero();
         twist_in.setZero();
         tau_nullspace.setZero();
         tau.setZero();
@@ -175,15 +176,15 @@ class PTINode {
         position_relative = position - position_0;
 
         Eigen::Quaterniond orientation_relative;
-        Eigen::Vector3d angle_relative_local;
+        Eigen::Vector3d quat_error_local;
         if (orientation_0.coeffs().dot(orientation.coeffs()) < 0.0) {
             orientation.coeffs() << -orientation.coeffs();
         }
         orientation_relative = orientation.inverse() * orientation_0;
-        angle_relative_local << orientation_relative.x(), orientation_relative.y(), orientation_relative.z();
-        angle_relative = transform.linear() * angle_relative_local;
+        quat_error_local << orientation_relative.x(), orientation_relative.y(), orientation_relative.z();
+        quat_error = transform.linear() * quat_error_local;
 
-        // std::cout << angle_relative.transpose() << std::endl;
+        // std::cout << quat_error.transpose() << std::endl;
 
         twist = jacobian * dq;
         tau_hose = joint5_jacobian.transpose() * hose_gravity;
@@ -196,7 +197,7 @@ class PTINode {
         double lambda = 10.0;
         double translation_stiffness = 1200.0;
         double translation_damping = 2.0 * 1.0 * std::sqrt(translation_stiffness * 1.0);
-        double rotation_stiffness = 20.0;
+        double rotation_stiffness = 100.0;
         double rotation_damping = 2.0 * 1.0 * std::sqrt(rotation_stiffness * 0.01);
         double torque_ratio = 0.8;
         double force_ratio = 0.5;
@@ -266,7 +267,7 @@ class PTINode {
 
 
         // open loop rotation control
-        force.tail(3) = -rotation_stiffness * (-angle_in - angle_relative) + rotation_damping * (twist_in.tail(3) - twist.tail(3));
+        force.tail(3) = rotation_stiffness * (quat_in + quat_error) + rotation_damping * (twist_in.tail(3) - twist.tail(3));
         force = force_regulation(force, force_ratio);
         
         tau = jacobian.transpose() * force + coriolis + tau_nullspace + tau_wall + tau_hose;
@@ -410,9 +411,9 @@ void PTINode::publish_ptipacket() {
     packet_msg.position.x = position_relative[0];
     packet_msg.position.y = position_relative[1];
     packet_msg.position.z = position_relative[2];
-    packet_msg.angle.x = -angle_relative[0];
-    packet_msg.angle.y = -angle_relative[1];
-    packet_msg.angle.z = -angle_relative[2];
+    packet_msg.angle.x = -quat_error[0];
+    packet_msg.angle.y = -quat_error[1];
+    packet_msg.angle.z = -quat_error[2];
     packet_msg.twist.linear.x = twist[0];
     packet_msg.twist.linear.y = twist[1];
     packet_msg.twist.linear.z = twist[2];
@@ -456,7 +457,7 @@ void PTINode::ptipacket_callback(const franka_control::PTIPacket::ConstPtr &pack
         wave_in[i] = packet_msg->wave[i];
     }
     position_in << packet_msg->position.x, packet_msg->position.y, packet_msg->position.z;
-    angle_in << packet_msg->angle.x / 2.0, packet_msg->angle.y / 2.0, packet_msg->angle.z / 2.0;
+    quat_in << packet_msg->quat.x, packet_msg->quat.y, packet_msg->quat.z;
     twist_in << packet_msg->twist.linear.x, packet_msg->twist.linear.y, packet_msg->twist.linear.z,\
                     packet_msg->twist.angular.x / 2.0, packet_msg->twist.angular.y / 2.0, packet_msg->twist.angular.z / 2.0;
     // mtx.unlock();
@@ -494,7 +495,7 @@ void PTINode::slow_catching(void) {
     double regulate_rotation_velocity = 8.0;
 
     Eigen::Vector3d position_target;
-    Eigen::Vector3d angle_target;
+    Eigen::Vector3d quat_target;
 
     for (int i = 0; i < 3; i ++) {
         if (position_in[i] > position_relative[i]) {
@@ -504,19 +505,19 @@ void PTINode::slow_catching(void) {
             position_target[i] = std::max(position_in[i], position_relative[i] - regulate_translation_velocity * sample_time);
         }
 
-        if (angle_in[i] > -angle_relative[i]) {
-            angle_target[i] = std::min(angle_in[i], -angle_relative[i] + regulate_rotation_velocity * sample_time); 
+        if (quat_in[i] > -quat_error[i]) {
+            quat_target[i] = std::min(quat_in[i], -quat_error[i] + regulate_rotation_velocity * sample_time); 
         }
         else {
-            angle_target[i] = std::max(angle_in[i], -angle_relative[i] - regulate_rotation_velocity * sample_time);
+            quat_target[i] = std::max(quat_in[i], -quat_error[i] - regulate_rotation_velocity * sample_time);
         }
     }
 
-    // std::cout << angle_in.transpose() + angle_relative.transpose() << std::endl;
+    // std::cout << quat_in.transpose() + quat_error.transpose() << std::endl;
 
     force.head(3) = translation_stiffness * (position_target - position_relative) + translation_damping * (-twist.head(3));
 
-    force.tail(3) = rotation_stiffness * (angle_target + angle_relative) + rotation_damping * (-twist.tail(3));
+    force.tail(3) = rotation_stiffness * (quat_target + quat_error) + rotation_damping * (-twist.tail(3));
     force = force_regulation(force, force_ratio);
     
     tau = jacobian.transpose() * force + coriolis + tau_hose + tau_wall;
@@ -575,7 +576,7 @@ void panda_control(PTINode& pti, std::string type, std::string ip, int* status) 
         std::cout << "WARNING: " << type << " arm starts moving."
                 << "Please make sure to have the user stop button at hand!" << std::endl
                 << "Press Enter to continue..." << std::endl;
-        std::cin.ignore();
+        // std::cin.ignore();
         robot.control(motion_generator);
         std::cout << "Finished moving to initial joint configuration." << std::endl;
 
@@ -596,7 +597,7 @@ void panda_control(PTINode& pti, std::string type, std::string ip, int* status) 
         std::cout << type << " PTI class initialized" << std::endl;
 
         if (type == "Right") {
-            pti.hose_gravity[2] = 8.0;
+            pti.hose_gravity[2] = 10.0;
         }
         else if (type == "Left") {
             pti.hose_gravity[2] = 10.0;
@@ -623,15 +624,15 @@ void panda_control(PTINode& pti, std::string type, std::string ip, int* status) 
             double position_error = std::sqrt((pti.position_in[0] - pti.position_relative[0]) * (pti.position_in[0] - pti.position_relative[0])
                                             + (pti.position_in[1] - pti.position_relative[1]) * (pti.position_in[1] - pti.position_relative[1])
                                             + (pti.position_in[2] - pti.position_relative[2]) * (pti.position_in[2] - pti.position_relative[2]));
-            double angle_error = std::sqrt((pti.angle_in[0] + pti.angle_relative[0]) * (pti.angle_in[0] + pti.angle_relative[0])
-                                        + (pti.angle_in[1] + pti.angle_relative[1]) * (pti.angle_in[1] + pti.angle_relative[1])
-                                        + (pti.angle_in[2] + pti.angle_relative[2]) * (pti.angle_in[2] + pti.angle_relative[2]));
+            double quaternion_error = std::sqrt((pti.quat_in[0] + pti.quat_error[0]) * (pti.quat_in[0] + pti.quat_error[0])
+                                        + (pti.quat_in[1] + pti.quat_error[1]) * (pti.quat_in[1] + pti.quat_error[1])
+                                        + (pti.quat_in[2] + pti.quat_error[2]) * (pti.quat_in[2] + pti.quat_error[2]));
 
             double position_threshold = 0.02;
-            double angle_threshold = 0.05;
+            double quaternion_threshold = 0.05;
 
-            std::cout << "position error: " << position_error << " , angle error: " << angle_error << std::endl;
-            if ((position_error < position_threshold) && (angle_error < angle_threshold)) {
+            std::cout << "position error: " << position_error << " , quaternion error: " << quaternion_error << std::endl;
+            if ((position_error < position_threshold) && (quaternion_error < quaternion_threshold)) {
                 std::cout << std::endl << "Homing position reached, starting teleop" << std::endl;
                 pti.tau = pti.coriolis;
                 franka::Torques homing_stop_torque{{pti.tau[0], pti.tau[1], pti.tau[2], pti.tau[3], pti.tau[4], pti.tau[5], pti.tau[6]}};
