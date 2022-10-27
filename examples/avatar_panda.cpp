@@ -200,7 +200,7 @@ class PTINode {
         double rotation_stiffness = 100.0;
         double rotation_damping = 2.0 * 1.0 * std::sqrt(rotation_stiffness * 0.01);
         double torque_ratio = 0.8;
-        double force_ratio = 0.5;
+        double force_ratio = 1.0;
 
         Eigen::Vector3d actual_position_error;
         Eigen::Vector3d predict_position_error;
@@ -210,7 +210,7 @@ class PTINode {
         int delay_index;
         int delay_difference;
         int delay_cycle_current;
-        delay_cycle_current = 4;
+        delay_cycle_current = 2;
 
         // translation part with wave variable
         position_d += twist_d.head(3) * sample_time;
@@ -271,7 +271,7 @@ class PTINode {
         force = force_regulation(force, force_ratio);
         
         tau = jacobian.transpose() * force + coriolis + tau_nullspace + tau_wall + tau_hose;
-        // tau = jacobian.transpose() * force + coriolis + tau_nullspace + tau_wall;
+        // tau = jacobian.transpose() * force + coriolis + tau_wall + tau_hose;
         tau = torque_regulation(tau, last_tau, torque_ratio);
         last_tau = tau;
 
@@ -315,7 +315,7 @@ class PTINode {
 
         th_nullspace_running = true;
 
-        ros::Rate loop_rate(500);
+        ros::Rate loop_rate(200);
         while (!done && *status == 0) {
             pseudoInverse(jacobian.transpose(), jacobian_transpose_pinv, true);
             // nullspace PD control with damping ratio = 1
@@ -468,7 +468,7 @@ void PTINode::ptipacket_callback(const franka_control::PTIPacket::ConstPtr &pack
 /* Run loop */
 void PTINode::ros_run(int* status) {
     th_ros_running = true;
-    ros::Rate loop_rate(1000);
+    ros::Rate loop_rate(500);
     while (!done && *status == 0) {
         // signal(SIGINT, signal_callback_handler);
         publish_ptipacket();
