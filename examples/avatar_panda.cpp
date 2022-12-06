@@ -101,7 +101,13 @@ class PTINode {
     Eigen::Vector3d wave_integral;
     Eigen::Vector3d position_in;
     Eigen::Vector3d quat_in;
+    Eigen::Vector3d quat_in_prev;
+    Eigen::Vector3d filtered_quat_in;
+    Eigen::Vector3d filtered_quat_in_prev;
     Eigen::Matrix<double, 6, 1> twist_in;
+    Eigen::Matrix<double, 6, 1> twist_in_prev;
+    Eigen::Matrix<double, 6, 1> filtered_twist_in;
+    Eigen::Matrix<double, 6, 1> filtered_twist_in_prev;
     double wave_damping;
 
     int delay_current_index;
@@ -131,7 +137,13 @@ class PTINode {
         wave_integral.setZero();
         position_in.setZero();
         quat_in.setZero();
+        quat_in_prev.setZero();
+        filtered_quat_in.setZero();
+        filtered_quat_in_prev.setZero();
         twist_in.setZero();
+        twist_in_prev.setZero();
+        filtered_twist_in.setZero();
+        filtered_twist_in_prev.setZero();
         tau_nullspace.setZero();
         tau.setZero();
         last_tau.setZero();
@@ -200,7 +212,7 @@ class PTINode {
         double rotation_stiffness = 100.0;
         double rotation_damping = 2.0 * 1.0 * std::sqrt(rotation_stiffness * 0.01);
         double torque_ratio = 0.8;
-        double force_ratio = 1.0;
+        double force_ratio = 0.5;
 
         Eigen::Vector3d actual_position_error;
         Eigen::Vector3d predict_position_error;
@@ -267,7 +279,7 @@ class PTINode {
 
 
         // open loop rotation control
-        force.tail(3) = rotation_stiffness * (quat_in + quat_error) + rotation_damping * (twist_in.tail(3) - twist.tail(3));
+        force.tail(3) = rotation_stiffness * (filtered_quat_in + quat_error) + rotation_damping * (filtered_twist_in.tail(3) - twist.tail(3));
         force = force_regulation(force, force_ratio);
         
         tau = jacobian.transpose() * force + coriolis + tau_nullspace + tau_wall + tau_hose;
@@ -371,6 +383,15 @@ class PTINode {
         }
         return result;
     }
+
+    double firstOrderIIRFilter(double input, double input_prev, double output_prev) {
+        double output;
+        double b0 = 2.0 * M_PI * 2.0 * 5e-3 / (2.0 + 2.0 * M_PI * 2.0 * 5e-3);
+        double b1 = b0;
+        double a1 = (2.0 - 2.0 * M_PI * 2.0 * 5e-3) / (2.0 + 2.0 * M_PI * 2.0 * 5e-3);
+        output = b0 * input + b1 * input_prev + a1 * output_prev;
+        return output;
+    }
 };
 
 /* Panda teleop interface */
@@ -456,11 +477,21 @@ void PTINode::ptipacket_callback(const franka_control::PTIPacket::ConstPtr &pack
     for (int i = 0; i < 3; i ++) {
         wave_in[i] = packet_msg->wave[i];
     }
+    quat_in_prev = quat_in;
+    filtered_quat_in_prev = filtered_quat_in;
+    twist_in_prev = twist_in;
+    filtered_twist_in_prev = filtered_twist_in;
+
     position_in << packet_msg->position.x, packet_msg->position.y, packet_msg->position.z;
     quat_in << packet_msg->quat.x, packet_msg->quat.y, packet_msg->quat.z;
     twist_in << packet_msg->twist.linear.x, packet_msg->twist.linear.y, packet_msg->twist.linear.z,\
                     packet_msg->twist.angular.x / 2.0, packet_msg->twist.angular.y / 2.0, packet_msg->twist.angular.z / 2.0;
     // mtx.unlock();
+
+    for (int i = 0; i < 3; i ++) {
+        filtered_quat_in[i] = firstOrderIIRFilter(quat_in[i], quat_in_prev[i], filtered_quat_in_prev[i]);
+        filtered_twist_in[i + 3] = firstOrderIIRFilter(twist_in[i + 3], twist_in_prev[i + 3], filtered_twist_in_prev[i + 3]);
+    }
     delay_cycle = (int)((ros::Time::now().toSec() - packet_msg->timestamp) / 1e-3 / 2);
     // ROS_INFO_THROTTLE(1, "Write into pti memory");
 }
@@ -468,7 +499,7 @@ void PTINode::ptipacket_callback(const franka_control::PTIPacket::ConstPtr &pack
 /* Run loop */
 void PTINode::ros_run(int* status) {
     th_ros_running = true;
-    ros::Rate loop_rate(500);
+    ros::Rate loop_rate(1000);
     while (!done && *status == 0) {
         // signal(SIGINT, signal_callback_handler);
         publish_ptipacket();
@@ -651,6 +682,8 @@ void panda_control(PTINode& pti, std::string type, std::string ip, int* status) 
 
         pti.position_d = pti.position_in;
         pti.last_tau.setZero();
+        pti.filtered_quat_in = pti.quat_in;
+        pti.filtered_quat_in_prev = pti.quat_in;
 
         std::function<franka::Torques(const franka::RobotState&, franka::Duration)>
             tele_control_callback = [&pti, &model, zero_torques, type](const franka::RobotState& robot_state, franka::Duration period) -> franka::Torques 
@@ -737,14 +770,14 @@ int main(int argc, char** argv) {
     if (std::string(argv[1]) == "left") {
         ros::init(argc, argv, "pti_interface_left", ros::init_options::NoSigintHandler);
         ros::NodeHandle node("~");
-        std::string ip = "10.180.1.100";
+        std::string ip = "192.168.1.101";
         PTINode pti(node, "Left");
         arm_run(pti, "Left", ip, &status);
     }
     else if (std::string(argv[1]) == "right") {
         ros::init(argc, argv, "pti_interface_right", ros::init_options::NoSigintHandler);
         ros::NodeHandle node("~");
-        std::string ip = "10.180.1.101";
+        std::string ip = "192.168.1.100";
         PTINode pti(node, "Right");
         arm_run(pti, "Right", ip, &status);
     }
