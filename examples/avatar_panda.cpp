@@ -97,6 +97,7 @@ class PTINode {
 
     /* wave variable */
     Eigen::Vector3d wave_in;
+    Eigen::Vector3d wave_in_prev;
     Eigen::Vector3d wave_out;
     Eigen::Vector3d wave_integral;
     Eigen::Vector3d position_in;
@@ -109,6 +110,7 @@ class PTINode {
     Eigen::Matrix<double, 6, 1> filtered_twist_in;
     Eigen::Matrix<double, 6, 1> filtered_twist_in_prev;
     double wave_damping;
+    double wave_filter_freq;
 
     int delay_current_index;
     int delay_cycle_previous;
@@ -134,6 +136,7 @@ class PTINode {
         position_d.setZero();
         twist_d.setZero();
         wave_in.setZero();
+        wave_in_prev.setZero();
         wave_integral.setZero();
         position_in.setZero();
         quat_in.setZero();
@@ -150,6 +153,7 @@ class PTINode {
         tau_wall.setZero();
 
         wave_damping = 10.0;
+        wave_filter_freq = 2.0 * M_PI * 20.0;
 
         delay_current_index = 0;
         delay_cycle_previous = 2;
@@ -222,7 +226,7 @@ class PTINode {
         int delay_index;
         int delay_difference;
         int delay_cycle_current;
-        delay_cycle_current = 2;
+        delay_cycle_current = 1;
 
         // translation part with wave variable
         position_d += twist_d.head(3) * sample_time;
@@ -474,9 +478,12 @@ void PTINode::publish_pinfo() {
 void PTINode::ptipacket_callback(const franka_control::PTIPacket::ConstPtr &packet_msg) {
 
     // mtx.lock();
+    Eigen::Vector3d wave_in_unfiltered;
     for (int i = 0; i < 3; i ++) {
-        wave_in[i] = packet_msg->wave[i];
+        wave_in_unfiltered[i] = packet_msg->wave[i];
     }
+    wave_in = (wave_filter_freq * sample_time * wave_in_unfiltered + wave_in_prev) / (wave_filter_freq * sample_time + 1.0);
+    wave_in_prev = wave_in;
     quat_in_prev = quat_in;
     filtered_quat_in_prev = filtered_quat_in;
     twist_in_prev = twist_in;
@@ -502,7 +509,7 @@ void PTINode::ros_run(int* status) {
     ros::Rate loop_rate(1000);
     while (!done && *status == 0) {
         // signal(SIGINT, signal_callback_handler);
-        publish_ptipacket();
+        // publish_ptipacket();
         publish_pinfo();
         ros::spinOnce();
         loop_rate.sleep();
@@ -697,6 +704,7 @@ void panda_control(PTINode& pti, std::string type, std::string ip, int* status) 
             pti.robotStateUpdate(model, robot_state);
             pti.jointLimit(type);
             pti.sTeleController();
+            pti.publish_ptipacket();
 
             std::array<double, 7> tau_d_array{};
             Eigen::VectorXd::Map(&tau_d_array[0], 7) = pti.tau;
