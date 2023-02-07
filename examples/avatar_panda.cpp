@@ -492,7 +492,7 @@ void PTINode::ptipacket_callback(const franka_control::PTIPacket::ConstPtr &pack
     position_in << packet_msg->position.x, packet_msg->position.y, packet_msg->position.z;
     quat_in << packet_msg->quat.x, packet_msg->quat.y, packet_msg->quat.z;
     twist_in << packet_msg->twist.linear.x, packet_msg->twist.linear.y, packet_msg->twist.linear.z,\
-                    packet_msg->twist.angular.x / 2.0, packet_msg->twist.angular.y / 2.0, packet_msg->twist.angular.z / 2.0;
+                    packet_msg->twist.angular.x, packet_msg->twist.angular.y, packet_msg->twist.angular.z;
     // mtx.unlock();
 
     for (int i = 0; i < 3; i ++) {
