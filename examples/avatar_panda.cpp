@@ -9,6 +9,7 @@
 #include <csignal>
 #include <math.h> 
 #include <signal.h>
+#include <string.h>
 
 #include <Eigen/Dense>
 #include <Eigen/Core>
@@ -24,6 +25,7 @@
 #include "examples_common.h"
 
 #include "ros/ros.h"
+#include "sensor_msgs/JointState.h"
 #include "geometry_msgs/Point.h"
 #include "geometry_msgs/Twist.h"
 #include "geometry_msgs/Quaternion.h"
@@ -51,9 +53,11 @@ class PTINode {
     ros::Subscriber pti_packet_sub;
     ros::Publisher pti_packet_pub;
     ros::Publisher pinfo_pub;
+    ros::Publisher robot_joint_state_pub;
     std::string node_type;
     void publish_ptipacket();
     void publish_pinfo();
+    void publish_robot_joint_state();
     void ptipacket_callback(const franka_control::PTIPacket::ConstPtr &msg);
     std::mutex mtx;
 
@@ -67,6 +71,7 @@ class PTINode {
     Eigen::Matrix<double, 7, 1> dq;
     Eigen::Matrix<double, 7, 1> tau;
     Eigen::Matrix<double, 7, 1> last_tau;
+    std::vector<std::string> joint_names = {"panda_joint1", "panda_joint2", "panda_joint3", "panda_joint4", "panda_joint5", "panda_joint6", "panda_joint7"};
 
     Eigen::Matrix<double, 7, 1> tau_nullspace;
     Eigen::Matrix<double, 7, 1> tau_wall;
@@ -401,19 +406,11 @@ class PTINode {
 /* Panda teleop interface */
 PTINode::PTINode(ros::NodeHandle& node, std::string type): node_type(type) {
     nh_ = node;
-
-    if (node_type == "Right") {
-        ROS_INFO("Launch ros interface as right panda");
-        pti_packet_sub = nh_.subscribe("/right_smarty_arm_output", 1, &PTINode::ptipacket_callback, this, ros::TransportHints().udp());
-        pti_packet_pub = nh_.advertise<franka_control::PTIPacket>("/pti_right_output", 1);
-        pinfo_pub = nh_.advertise<franka_control::PInfo>("/right_panda_info", 1);
-    }
-    else if (node_type == "Left") {
-        ROS_INFO("Launch ros interface as left panda");
-        pti_packet_sub = nh_.subscribe("/left_smarty_arm_output", 1, &PTINode::ptipacket_callback, this, ros::TransportHints().udp());
-        pti_packet_pub = nh_.advertise<franka_control::PTIPacket>("/pti_left_output", 1);
-        pinfo_pub = nh_.advertise<franka_control::PInfo>("/left_panda_info", 1);
-    }
+    ROS_INFO_STREAM("Launch ros interface as" << node_type << "panda");
+    pti_packet_sub = nh_.subscribe("/" + node_type + "_smarty_arm_output", 1, &PTINode::ptipacket_callback, this, ros::TransportHints().udp());
+    pti_packet_pub = nh_.advertise<franka_control::PTIPacket>("pti_output", 1);
+    pinfo_pub = nh_.advertise<franka_control::PInfo>("panda_info", 1);
+    robot_joint_state_pub = nh_.advertise<sensor_msgs::JointState>("joint_states", 1);
 
     ROS_INFO("Node initialized");
 }
@@ -474,6 +471,22 @@ void PTINode::publish_pinfo() {
     pinfo_pub.publish(info_msg);
 }
 
+void PTINode::publish_robot_joint_state() {
+    sensor_msgs::JointState states;
+    states.effort.resize(joint_names.size());
+    states.name.resize(joint_names.size());
+    states.position.resize(joint_names.size());
+    states.velocity.resize(joint_names.size());
+    states.header.stamp = ros::Time::now();
+    for (size_t i = 0; i < joint_names.size(); i++) {
+        states.name[i] = joint_names[i];
+        states.position[i] = q[i];
+        states.velocity[i] = dq[i];
+        states.effort[i] = tau[i];
+    }
+    robot_joint_state_pub.publish(states);
+}
+
 /* Subscriber callback */
 void PTINode::ptipacket_callback(const franka_control::PTIPacket::ConstPtr &packet_msg) {
 
@@ -506,11 +519,12 @@ void PTINode::ptipacket_callback(const franka_control::PTIPacket::ConstPtr &pack
 /* Run loop */
 void PTINode::ros_run(int* status) {
     th_ros_running = true;
-    ros::Rate loop_rate(1000);
+    ros::Rate loop_rate(100);
     while (!done && *status == 0) {
         // signal(SIGINT, signal_callback_handler);
         // publish_ptipacket();
         publish_pinfo();
+        publish_robot_joint_state();
         ros::spinOnce();
         loop_rate.sleep();
     }
@@ -585,7 +599,7 @@ void panda_control(PTINode& pti, std::string type, std::string ip, int* status) 
                                 {{100.0, 100.0, 100.0, 100.0, 100.0, 100.0}});
         
         // set external load
-        if (type == "Right") {
+        if (type == "right") {
             const double load_mass = 0.9; // 2.5 fully filled
             // const std::array< double, 3 > F_x_Cload = {{0.03, -0.01, -0.06}};
             // const std::array< double, 9 > load_inertia = {{0.01395, 0.0, 0.0, 0.0, 0.01395, 0.0, 0.0, 0.0, 0.00125}};
@@ -593,7 +607,7 @@ void panda_control(PTINode& pti, std::string type, std::string ip, int* status) 
             const std::array< double, 9 > load_inertia = {{0.001, 0.0, 0.0, 0.0, 0.001, 0.0, 0.0, 0.0, 0.001}};
             robot.setLoad(load_mass, F_x_Cload, load_inertia);
         }
-        else if (type == "Left") {
+        else if (type == "left") {
             const double load_mass = 0.9;
             // const std::array< double, 3 > F_x_Cload = {{0.03, -0.01, -0.06}};
             // const std::array< double, 9 > load_inertia = {{0.01395, 0.0, 0.0, 0.0, 0.01395, 0.0, 0.0, 0.0, 0.00125}};
@@ -604,10 +618,10 @@ void panda_control(PTINode& pti, std::string type, std::string ip, int* status) 
         
         // First move the robot to a suitable joint configuration
         std::array<double, 7> q_goal;
-        if (type == "Right") {
+        if (type == "right") {
             q_goal = std::array<double, 7>{{0.0, 0.0, 0.0, -2.7, 1.5708, 1.5708, -2.0}};
         }
-        else if (type == "Left") {
+        else if (type == "left") {
             q_goal = std::array<double, 7>{{0.0, 0.0, 0.0, -2.7, -1.5708, 1.5708, 0.4}};
         }
         MotionGenerator motion_generator(0.3, q_goal);
@@ -618,11 +632,11 @@ void panda_control(PTINode& pti, std::string type, std::string ip, int* status) 
         robot.control(motion_generator);
         std::cout << "Finished moving to initial joint configuration." << std::endl;
 
-        if (type == "Right") {
+        if (type == "right") {
             std::array<double, 16> ee = {{1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.05, 1.0}};
             robot.setEE(ee);
         }
-        else if (type == "Left") {
+        else if (type == "left") {
             std::array<double, 16> ee = {{1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.05, 1.0}};
             robot.setEE(ee);
         }
@@ -634,10 +648,10 @@ void panda_control(PTINode& pti, std::string type, std::string ip, int* status) 
         pti.teleInit(model);
         std::cout << type << " PTI class initialized" << std::endl;
 
-        if (type == "Right") {
+        if (type == "right") {
             pti.hose_gravity[2] = 10.0;
         }
-        else if (type == "Left") {
+        else if (type == "left") {
             pti.hose_gravity[2] = 10.0;
         }
 
@@ -779,15 +793,15 @@ int main(int argc, char** argv) {
         ros::init(argc, argv, "pti_interface_left", ros::init_options::NoSigintHandler);
         ros::NodeHandle node("~");
         std::string ip = "192.168.1.101";
-        PTINode pti(node, "Left");
-        arm_run(pti, "Left", ip, &status);
+        PTINode pti(node, "left");
+        arm_run(pti, "left", ip, &status);
     }
     else if (std::string(argv[1]) == "right") {
         ros::init(argc, argv, "pti_interface_right", ros::init_options::NoSigintHandler);
         ros::NodeHandle node("~");
         std::string ip = "192.168.1.100";
-        PTINode pti(node, "Right");
-        arm_run(pti, "Right", ip, &status);
+        PTINode pti(node, "right");
+        arm_run(pti, "right", ip, &status);
     }
     else {
         std::cout << "Error: left or right arm not configured." << std::endl;
