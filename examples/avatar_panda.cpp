@@ -95,6 +95,7 @@ class PTINode {
     Eigen::Matrix<double, 6, 1> twist_d;
     Eigen::Matrix<double, 6, 1> force;
     Eigen::Matrix<double, 6, 1> est_ext_force;
+    Eigen::Matrix<double, 7, 7> inertia;
 
     Eigen::Matrix<double, 7, 1> coriolis;
     Eigen::Matrix<double, 6, 7> jacobian;
@@ -138,6 +139,9 @@ class PTINode {
         jacobian = Eigen::Map<const Eigen::Matrix<double, 6, 7>>(model.zeroJacobian(franka::Frame::kEndEffector, initial_state).data());
         joint5_jacobian = Eigen::Map<const Eigen::Matrix<double, 6, 7>>(model.zeroJacobian(franka::Frame::kJoint5, initial_state).data());
 
+        std::array<double, 49> initial_inertia_array = model.mass(initial_state);
+        inertia = Eigen::Map<const Eigen::Matrix<double, 7, 7>>(initial_inertia_array.data());
+
         position_d.setZero();
         twist_d.setZero();
         wave_in.setZero();
@@ -180,6 +184,7 @@ class PTINode {
         std::array<double, 7> coriolis_array = model.coriolis(robot_state);
         std::array<double, 42> jacobian_array = model.zeroJacobian(franka::Frame::kEndEffector, robot_state);
         std::array<double, 42> joint5_jacobian_array = model.zeroJacobian(franka::Frame::kJoint5, robot_state);
+        std::array<double, 49> inertia_array = model.mass(robot_state);
 
         coriolis = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(coriolis_array.data());
         jacobian = Eigen::Map<const Eigen::Matrix<double, 6, 7>>(jacobian_array.data());
@@ -188,6 +193,7 @@ class PTINode {
         dq = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(robot_state.dq.data());
 
         est_ext_force = Eigen::Map<const Eigen::Matrix<double, 6, 1>>(robot_state.O_F_ext_hat_K.data());
+        inertia = Eigen::Map<const Eigen::Matrix<double, 7, 7>>(inertia_array.data());
 
         // std::cout << q.transpose()<< std::endl;
 
@@ -332,18 +338,20 @@ class PTINode {
     void nullHandling(int* status) {
 
         Eigen::MatrixXd jacobian_transpose_pinv;
-        double nullspace_stiffness_ = 1.0;
+        double nullspace_stiffness_ = 10.0;
 
         th_nullspace_running = true;
 
-        ros::Rate loop_rate(200);
+        ros::Rate loop_rate(1000);
         while (!done && *status == 0) {
-            pseudoInverse(jacobian.transpose(), jacobian_transpose_pinv, true);
+            // pseudoInverse(jacobian.transpose(), jacobian_transpose_pinv, true);
+            dynamicallyConsistentGeneralizedInverse(jacobian, inertia, jacobian_transpose_pinv);
             // nullspace PD control with damping ratio = 1
             tau_nullspace << (Eigen::MatrixXd::Identity(7, 7) - jacobian.transpose() * jacobian_transpose_pinv) * 
                         (nullspace_stiffness_ * (q0 - q) - (2.0 * std::sqrt(nullspace_stiffness_)) * dq);
             
             loop_rate.sleep();
+            // std::cout << loop_rate.cycleTime() << std::endl;
             // std::cout << tau_nullspace.transpose() << std::endl;
         }
 
@@ -365,6 +373,14 @@ class PTINode {
             S_(i, i) = (sing_vals_(i)) / (sing_vals_(i) * sing_vals_(i) + lambda_ * lambda_);
 
         M_pinv_ = Eigen::MatrixXd(svd.matrixV() * S_.transpose() * svd.matrixU().transpose());
+    }
+
+    /* dynamically_consistent_generalized_inverse */
+    void dynamicallyConsistentGeneralizedInverse(const Eigen::MatrixXd& J_, const Eigen::MatrixXd& M_, Eigen::MatrixXd& J_dcginv_) {
+        Eigen::MatrixXd M_inv_ = M_.inverse();
+        Eigen::MatrixXd M_ee_inv_ = J_ * M_inv_ * J_.transpose();
+        
+        J_dcginv_ = M_ee_inv_.inverse() * J_ * M_inv_;
     }
 
     Eigen::Matrix<double, 7, 1> torque_regulation(Eigen::Matrix<double, 7, 1> val, Eigen::Matrix<double, 7, 1> last_val, double ratio) {
