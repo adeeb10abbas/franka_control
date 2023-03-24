@@ -297,7 +297,7 @@ class PTINode {
         force.tail(3) = rotation_stiffness * (filtered_quat_in + quat_error) + rotation_damping * (filtered_twist_in.tail(3) - twist.tail(3));
         force = force_regulation(force, force_ratio);
         
-        tau = jacobian.transpose() * force + coriolis + tau_nullspace + tau_wall + tau_hose;
+        tau = jacobian.transpose() * force + coriolis + tau_nullspace + tau_wall;
         // tau = jacobian.transpose() * force + coriolis + tau_wall + tau_hose;
         tau = torque_regulation(tau, last_tau, torque_ratio);
         last_tau = tau;
@@ -339,17 +339,19 @@ class PTINode {
 
         Eigen::MatrixXd jacobian_transpose_pinv;
         double nullspace_stiffness_ = 10.0;
+        Eigen::MatrixXd M_ee;
 
         th_nullspace_running = true;
 
         ros::Rate loop_rate(1000);
         while (!done && *status == 0) {
             // pseudoInverse(jacobian.transpose(), jacobian_transpose_pinv, true);
-            dynamicallyConsistentGeneralizedInverse(jacobian, inertia, jacobian_transpose_pinv);
+            dynamicallyConsistentGeneralizedInverse(jacobian, inertia, jacobian_transpose_pinv, M_ee);
             // nullspace PD control with damping ratio = 1
             tau_nullspace << (Eigen::MatrixXd::Identity(7, 7) - jacobian.transpose() * jacobian_transpose_pinv) * 
                         (nullspace_stiffness_ * (q0 - q) - (2.0 * std::sqrt(nullspace_stiffness_)) * dq);
             
+            // std::cout << M_ee << std::endl;
             loop_rate.sleep();
             // std::cout << loop_rate.cycleTime() << std::endl;
             // std::cout << tau_nullspace.transpose() << std::endl;
@@ -376,10 +378,11 @@ class PTINode {
     }
 
     /* dynamically_consistent_generalized_inverse */
-    void dynamicallyConsistentGeneralizedInverse(const Eigen::MatrixXd& J_, const Eigen::MatrixXd& M_, Eigen::MatrixXd& J_dcginv_) {
+    void dynamicallyConsistentGeneralizedInverse(const Eigen::MatrixXd& J_, const Eigen::MatrixXd& M_, Eigen::MatrixXd& J_dcginv_, Eigen::MatrixXd& M_ee_) {
         Eigen::MatrixXd M_inv_ = M_.inverse();
         Eigen::MatrixXd M_ee_inv_ = J_ * M_inv_ * J_.transpose();
         
+        M_ee_ = M_ee_inv_.inverse();
         J_dcginv_ = M_ee_inv_.inverse() * J_ * M_inv_;
     }
 
@@ -437,14 +440,14 @@ PTINode::PTINode(ros::NodeHandle& node, std::string type): node_type(type) {
 void PTINode::publish_ptipacket() {
     franka_control::PTIPacket packet_msg;
     packet_msg.wave.resize(3);
-    packet_msg.test.resize(7);
+    packet_msg.test.resize(6);
 
     // mtx.lock();
     for (int i = 0; i < 3; i ++) {
         packet_msg.wave[i] = wave_out[i];
     }
-    for (int i = 0; i < 7; i ++) {
-        packet_msg.test[i] = tau[i];
+    for (int i = 0; i < 6; i ++) {
+        packet_msg.test[i] = est_ext_force[i];
     }
     packet_msg.position.x = position_relative[0];
     packet_msg.position.y = position_relative[1];
@@ -616,19 +619,19 @@ void panda_control(PTINode& pti, std::string type, std::string ip, int* status) 
         
         // set external load
         if (type == "right") {
-            const double load_mass = 0.9; // 2.5 fully filled
+            const double load_mass = 1.8; // 2.5 fully filled
             // const std::array< double, 3 > F_x_Cload = {{0.03, -0.01, -0.06}};
             // const std::array< double, 9 > load_inertia = {{0.01395, 0.0, 0.0, 0.0, 0.01395, 0.0, 0.0, 0.0, 0.00125}};
             const std::array< double, 3 > F_x_Cload = {{0.0, 0.0, 0.0}};
-            const std::array< double, 9 > load_inertia = {{0.001, 0.0, 0.0, 0.0, 0.001, 0.0, 0.0, 0.0, 0.001}};
+            const std::array< double, 9 > load_inertia = {{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
             robot.setLoad(load_mass, F_x_Cload, load_inertia);
         }
         else if (type == "left") {
-            const double load_mass = 0.9;
+            const double load_mass = 1.8;
             // const std::array< double, 3 > F_x_Cload = {{0.03, -0.01, -0.06}};
             // const std::array< double, 9 > load_inertia = {{0.01395, 0.0, 0.0, 0.0, 0.01395, 0.0, 0.0, 0.0, 0.00125}};
             const std::array< double, 3 > F_x_Cload = {{0.0, 0.0, 0.0}};
-            const std::array< double, 9 > load_inertia = {{0.001, 0.0, 0.0, 0.0, 0.001, 0.0, 0.0, 0.0, 0.001}};
+            const std::array< double, 9 > load_inertia = {{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
             robot.setLoad(load_mass, F_x_Cload, load_inertia);
         }
         
