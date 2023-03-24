@@ -123,6 +123,7 @@ class PTINode {
     int max_buff_size = 2000;
     double wave_history[3][2000];
     int delay_cycle;
+    double remote_time;
     double sample_time;
 
     /* panda initialization */
@@ -174,6 +175,7 @@ class PTINode {
             }
         }
         sample_time = 1e-3;
+        remote_time = ros::Time::now().toSec();
 
         hose_gravity.setZero();
     }
@@ -462,7 +464,8 @@ void PTINode::publish_ptipacket() {
     packet_msg.twist.angular.y = twist[4];
     packet_msg.twist.angular.z = twist[5];
     // mtx.unlock();
-    packet_msg.timestamp = ros::Time::now().toSec();
+    packet_msg.local_stamp = ros::Time::now().toSec();
+    packet_msg.remote_stamp = remote_time;
 
     // if (pti_packet_pub.getNumSubscribers() == 0) {
     //     if (node_type == "Right") {
@@ -531,19 +534,26 @@ void PTINode::ptipacket_callback(const franka_control::PTIPacket::ConstPtr &pack
         filtered_quat_in[i] = firstOrderIIRFilter(quat_in[i], quat_in_prev[i], filtered_quat_in_prev[i]);
         filtered_twist_in[i + 3] = firstOrderIIRFilter(twist_in[i + 3], twist_in_prev[i + 3], filtered_twist_in_prev[i + 3]);
     }
-    delay_cycle = (int)((ros::Time::now().toSec() - packet_msg->timestamp) / 1e-3 / 2);
+    delay_cycle = (int)((ros::Time::now().toSec() - packet_msg->remote_stamp) / 1e-3 / 2);
+    remote_time = packet_msg->local_stamp;
     // ROS_INFO_THROTTLE(1, "Write into pti memory");
 }
 
 /* Run loop */
 void PTINode::ros_run(int* status) {
     th_ros_running = true;
-    ros::Rate loop_rate(100);
+    int publish_ratio = 10;
+    int publish_index = 1;
+    ros::Rate loop_rate(1000);
     while (!done && *status == 0) {
         // signal(SIGINT, signal_callback_handler);
         // publish_ptipacket();
-        publish_pinfo();
-        publish_robot_joint_state();
+        if (publish_index < publish_ratio) publish_index++;
+        else {
+            publish_pinfo();
+            publish_robot_joint_state();
+            publish_index = 1;
+        }
         ros::spinOnce();
         loop_rate.sleep();
     }
