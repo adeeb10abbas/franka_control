@@ -71,6 +71,9 @@ class PTINode {
     Eigen::Matrix<double, 7, 1> dq;
     Eigen::Matrix<double, 7, 1> tau;
     Eigen::Matrix<double, 7, 1> last_tau;
+    Eigen::Matrix<double, 7, 1> tau_measured;
+    Eigen::Matrix<double, 7, 1> tau_ext;
+    Eigen::Matrix<double, 7, 1> gravity;
     std::vector<std::string> joint_names = {"panda_joint1", "panda_joint2", "panda_joint3", "panda_joint4", "panda_joint5", "panda_joint6", "panda_joint7"};
 
     Eigen::Matrix<double, 7, 1> tau_nullspace;
@@ -83,6 +86,7 @@ class PTINode {
     Eigen::Affine3d initial_transform;
     Eigen::Vector3d position_0;
     Eigen::Quaterniond orientation_0;
+    Eigen::Matrix<double, 7, 1> initial_tau_ext;
 
     /* robot end-effector state */
     Eigen::Affine3d transform;
@@ -96,6 +100,7 @@ class PTINode {
     Eigen::Matrix<double, 6, 1> force;
     Eigen::Matrix<double, 6, 1> est_ext_force;
     Eigen::Matrix<double, 7, 7> inertia;
+    double robot_translation_mass;
 
     Eigen::Matrix<double, 7, 1> coriolis;
     Eigen::Matrix<double, 6, 7> jacobian;
@@ -142,6 +147,11 @@ class PTINode {
 
         std::array<double, 49> initial_inertia_array = model.mass(initial_state);
         inertia = Eigen::Map<const Eigen::Matrix<double, 7, 7>>(initial_inertia_array.data());
+        robot_translation_mass = 5.0;
+
+        Eigen::Map<Eigen::Matrix<double, 7, 1>> initial_tau_measured(initial_state.tau_J.data());
+        Eigen::Map<Eigen::Matrix<double, 7, 1>> initial_gravity(model.gravity(initial_state).data());
+        initial_tau_ext = initial_tau_measured - initial_gravity;
 
         position_d.setZero();
         twist_d.setZero();
@@ -196,6 +206,10 @@ class PTINode {
 
         est_ext_force = Eigen::Map<const Eigen::Matrix<double, 6, 1>>(robot_state.O_F_ext_hat_K.data());
         inertia = Eigen::Map<const Eigen::Matrix<double, 7, 7>>(inertia_array.data());
+
+        tau_measured = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(robot_state.tau_J.data());
+        gravity = Eigen::Map<const Eigen::Matrix<double, 7, 1>>(model.gravity(robot_state).data());
+        tau_ext = tau_measured - gravity - initial_tau_ext;
 
         // std::cout << q.transpose()<< std::endl;
 
@@ -353,6 +367,7 @@ class PTINode {
             tau_nullspace << (Eigen::MatrixXd::Identity(7, 7) - jacobian.transpose() * jacobian_transpose_pinv) * 
                         (nullspace_stiffness_ * (q0 - q) - (2.0 * std::sqrt(nullspace_stiffness_)) * dq);
             
+            robot_translation_mass = (M_ee(0,0) + M_ee(0,1) + M_ee(0,2) + M_ee(1,0) + M_ee(1,1) + M_ee(1,2) + M_ee(2,0) + M_ee(2,1) + M_ee(2,2)) / 3;
             // std::cout << M_ee << std::endl;
             loop_rate.sleep();
             // std::cout << loop_rate.cycleTime() << std::endl;
@@ -442,14 +457,15 @@ PTINode::PTINode(ros::NodeHandle& node, std::string type): node_type(type) {
 void PTINode::publish_ptipacket() {
     franka_control::PTIPacket packet_msg;
     packet_msg.wave.resize(3);
-    packet_msg.test.resize(6);
+    packet_msg.est_ext_force.resize(6);
 
     // mtx.lock();
+    packet_msg.robot_translation_mass = robot_translation_mass;
     for (int i = 0; i < 3; i ++) {
         packet_msg.wave[i] = wave_out[i];
     }
-    for (int i = 0; i < 6; i ++) {
-        packet_msg.test[i] = est_ext_force[i];
+    for (int i = 0; i < 3; i ++) {
+        packet_msg.est_ext_force[i] = est_ext_force[i];
     }
     packet_msg.position.x = position_relative[0];
     packet_msg.position.y = position_relative[1];
@@ -466,6 +482,9 @@ void PTINode::publish_ptipacket() {
     // mtx.unlock();
     packet_msg.local_stamp = ros::Time::now().toSec();
     packet_msg.remote_stamp = remote_time;
+    packet_msg.position_d.x = position_d[0];
+    packet_msg.position_d.y = position_d[1];
+    packet_msg.position_d.z = position_d[2];
 
     // if (pti_packet_pub.getNumSubscribers() == 0) {
     //     if (node_type == "Right") {
@@ -629,7 +648,7 @@ void panda_control(PTINode& pti, std::string type, std::string ip, int* status) 
         
         // set external load
         if (type == "right") {
-            const double load_mass = 1.8; // 2.5 fully filled
+            const double load_mass = 1.7; // 2.5 fully filled
             // const std::array< double, 3 > F_x_Cload = {{0.03, -0.01, -0.06}};
             // const std::array< double, 9 > load_inertia = {{0.01395, 0.0, 0.0, 0.0, 0.01395, 0.0, 0.0, 0.0, 0.00125}};
             const std::array< double, 3 > F_x_Cload = {{0.0, 0.0, 0.0}};
@@ -637,7 +656,7 @@ void panda_control(PTINode& pti, std::string type, std::string ip, int* status) 
             robot.setLoad(load_mass, F_x_Cload, load_inertia);
         }
         else if (type == "left") {
-            const double load_mass = 1.8;
+            const double load_mass = 1.7;
             // const std::array< double, 3 > F_x_Cload = {{0.03, -0.01, -0.06}};
             // const std::array< double, 9 > load_inertia = {{0.01395, 0.0, 0.0, 0.0, 0.01395, 0.0, 0.0, 0.0, 0.00125}};
             const std::array< double, 3 > F_x_Cload = {{0.0, 0.0, 0.0}};
