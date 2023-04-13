@@ -237,7 +237,7 @@ class PTINode {
     void sTeleController(void) {
 
         int num = 3;
-        double lambda = 10.0;
+        double lambda = 1.0;
         double translation_stiffness = 1200.0;
         double translation_damping = 2.0 * 1.0 * std::sqrt(translation_stiffness * 1.0);
         double rotation_stiffness = 100.0;
@@ -257,6 +257,23 @@ class PTINode {
 
         // translation part with wave variable
         position_d += twist_d.head(3) * sample_time;
+
+        // position drift correction
+        actual_position_error = position_in - position_d;
+        predict_position_error = -1.0 / std::sqrt(2.0 * wave_damping) * wave_integral;
+        error_difference = predict_position_error - actual_position_error;
+        wave_correction = -1.0 * std::sqrt(2.0 * wave_damping) * (2.0 * M_PI * lambda) * error_difference;
+        for (int i = 0; i < num; i ++) {
+            if (wave_correction[i] * wave_in[i] < 0) {
+                if (std::fabs(wave_correction[i]) < std::fabs(wave_in[i])) {
+                    wave_in[i] += wave_correction[i];
+                }
+                else {
+                    wave_in[i] = 0.0;
+                }
+            }
+
+
         twist_d.head(3) = (std::sqrt(2.0 * wave_damping) * wave_in + translation_damping * twist.head(3) + \
                         translation_stiffness * (position_relative - position_d)) / (wave_damping + translation_damping);
         force.head(3) = translation_stiffness * (position_d - position_relative) + translation_damping * (twist_d.head(3) - twist.head(3));
@@ -267,21 +284,6 @@ class PTINode {
         if (delay_index < 0) {
             delay_index += max_buff_size;
         }
-
-        // position drift correction
-        actual_position_error = position_in - position_d;
-        predict_position_error = -1.0 / std::sqrt(2.0 * wave_damping) * wave_integral;
-        error_difference = predict_position_error - actual_position_error;
-        wave_correction = 1.0 * std::sqrt(2.0 * wave_damping) * (2.0 * M_PI * lambda) * error_difference;
-        for (int i = 0; i < num; i ++) {
-            if (error_difference[i] * wave_out[i] <= 0) {
-                if (std::fabs(wave_correction[i]) < std::fabs(wave_out[i])) {
-                    wave_out[i] += wave_correction[i];
-                }
-                else {
-                    wave_out[i] = 0.0;
-                }
-            }
 
             /* check time-varying current delay cycle */
             if (delay_difference == 0) {
@@ -313,7 +315,7 @@ class PTINode {
         force.tail(3) = rotation_stiffness * (filtered_quat_in + quat_error) + rotation_damping * (filtered_twist_in.tail(3) - twist.tail(3));
         force = force_regulation(force, force_ratio);
         
-        tau = jacobian.transpose() * force + coriolis + tau_nullspace + tau_wall;
+        tau = jacobian.transpose() * force + coriolis + tau_nullspace + tau_wall + tau_hose;
         // tau = jacobian.transpose() * force + coriolis + tau_wall + tau_hose;
         tau = torque_regulation(tau, last_tau, torque_ratio);
         last_tau = tau;
@@ -648,19 +650,19 @@ void panda_control(PTINode& pti, std::string type, std::string ip, int* status) 
         
         // set external load
         if (type == "right") {
-            const double load_mass = 1.7; // 2.5 fully filled
+            const double load_mass = 0.9; // 2.5 fully filled
             // const std::array< double, 3 > F_x_Cload = {{0.03, -0.01, -0.06}};
             // const std::array< double, 9 > load_inertia = {{0.01395, 0.0, 0.0, 0.0, 0.01395, 0.0, 0.0, 0.0, 0.00125}};
             const std::array< double, 3 > F_x_Cload = {{0.0, 0.0, 0.0}};
-            const std::array< double, 9 > load_inertia = {{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
+            const std::array< double, 9 > load_inertia = {{0.001, 0.0, 0.0, 0.0, 0.001, 0.0, 0.0, 0.0, 0.001}};
             robot.setLoad(load_mass, F_x_Cload, load_inertia);
         }
         else if (type == "left") {
-            const double load_mass = 1.7;
+            const double load_mass = 0.9;
             // const std::array< double, 3 > F_x_Cload = {{0.03, -0.01, -0.06}};
             // const std::array< double, 9 > load_inertia = {{0.01395, 0.0, 0.0, 0.0, 0.01395, 0.0, 0.0, 0.0, 0.00125}};
             const std::array< double, 3 > F_x_Cload = {{0.0, 0.0, 0.0}};
-            const std::array< double, 9 > load_inertia = {{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
+            const std::array< double, 9 > load_inertia = {{0.001, 0.0, 0.0, 0.0, 0.001, 0.0, 0.0, 0.0, 0.001}};
             robot.setLoad(load_mass, F_x_Cload, load_inertia);
         }
         
