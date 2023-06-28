@@ -74,8 +74,7 @@ class PTINode {
     Eigen::Matrix<double, 7, 1> tau_measured;
     Eigen::Matrix<double, 7, 1> tau_ext;
     Eigen::Matrix<double, 7, 1> gravity;
-    std::vector<std::string> joint_names = {"panda_joint1", "panda_joint2", "panda_joint3", "panda_joint4", "panda_joint5", "panda_joint6", "panda_joint7"};
-
+    std::vector<std::string> joint_names; 
     Eigen::Matrix<double, 7, 1> tau_nullspace;
     Eigen::Matrix<double, 7, 1> tau_wall;
     Eigen::Matrix<double, 7, 1> tau_hose;
@@ -445,7 +444,14 @@ class PTINode {
 PTINode::PTINode(ros::NodeHandle& node, std::string type): node_type(type) {
     nh_ = node;
     ROS_INFO_STREAM("Launch ros interface as" << node_type << "panda");
-    pti_packet_sub = nh_.subscribe("/" + node_type + "_smarty_arm_output", 1, &PTINode::ptipacket_callback, this, ros::TransportHints().udp());
+    joint_names.insert(joint_names.end(),{node_type+"_panda_joint1", 
+                                          node_type+"_panda_joint2", 
+                                          node_type+"_panda_joint3", 
+                                          node_type+"_panda_joint4", 
+                                          node_type+"_panda_joint5", 
+                                          node_type+"_panda_joint6", 
+                                          node_type+"_panda_joint7"});
+    pti_packet_sub = nh_.subscribe("/" + node_type + "_smarty_arm_output", 1, &PTINode::ptipacket_callback, this);
     pti_packet_pub = nh_.advertise<franka_control::PTIPacket>("pti_output", 1);
     pinfo_pub = nh_.advertise<franka_control::PInfo>("panda_info", 1);
     robot_joint_state_pub = nh_.advertise<sensor_msgs::JointState>("joint_states", 1);
