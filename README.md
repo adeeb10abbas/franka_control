@@ -1,6 +1,7 @@
 # franka_control
 
-This repository contains the teleoperation controller for Panda arm running on the robot.
+This repository contains the ROS teleoperation codebase for Panda arm.
+These codes must be running on the robot.
 
 ## Dependencies
 Install `libfranka`.
